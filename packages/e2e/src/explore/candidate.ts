@@ -7,6 +7,7 @@
  * seeds so no model-authored success claim silently becomes test truth.
  */
 
+import { existsSync } from 'node:fs';
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { ConfigurationError } from '../internal/errors.ts';
@@ -32,6 +33,9 @@ export function resolveExploreCandidatePath(projectRoot: string, requested: stri
   const target = path.resolve(projectRoot, trimmed);
   if (relativeToProjectRoot(projectRoot, target) === undefined) {
     throw new ConfigurationError('INVALID_CONFIG', `--write-test must stay inside the project, got ${JSON.stringify(requested)}`);
+  }
+  if (existsSync(target)) {
+    throw new ConfigurationError('INVALID_CONFIG', `--write-test refuses to replace existing file ${JSON.stringify(requested)}`);
   }
   return target;
 }
