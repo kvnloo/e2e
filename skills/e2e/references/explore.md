@@ -11,6 +11,7 @@ npx e2e explore 'Explore checkout like a first-time buyer and report anything of
 npx e2e explore --target web --max-steps 4 --headed
 npx e2e explore 'Hunt for broken forms' --video
 npx e2e explore --session admin 'Explore the admin settings'
+npx e2e explore 'Exercise checkout end to end' --write-test tests/checkout-candidate.e2e.ts
 ```
 
 ## What a run does
@@ -64,6 +65,7 @@ configured secrets are redacted (topic `writing-tests`).
 | `--session <name>` | none | Run the setup that saves this session, then explore with it restored. |
 | `--max-steps <n>` | 8 (1 to 12) | Exploration steps at most. |
 | `--timeout <ms>` | 600000 (180000 to 900000) | Wall clock; the last minute is for the assessment. |
+| `--write-test <path>` | none | After a passed exploration, write a skipped test candidate inside the project. Existing files are never replaced. Every passed charter stays an `agent.act()` seed with a `VERIFY` note; add independent deterministic checks before enabling it. |
 | `--headed`, `--reporter`, `--output`, `--debug`, `--ai-trace`, `--trace [mode]`, `--video [mode]` | as `run` | Same meaning as for `e2e run`. One attempt, so a retry mode (`on-first-retry`, `on-all-retries`, the CI trace default) records nothing (`CI=1 e2e explore` needs `--trace on`; the run's notice says so); put the goal before a bare `--trace` or `--video`. |
 
 Per-step action and model-call budgets default to 40 each;
@@ -117,6 +119,10 @@ For example
 
 Turn a finding into a test: its `reproduction` steps are the `agent.act()`
 instructions or `screen.*` actions, and `expected` is the assertion.
+
+For a passing journey, `--write-test` writes a skipped candidate instead of
+claiming the exploration is already a regression oracle. Keep `test.skip(...)`
+until each generated `VERIFY` note has an independent deterministic check.
 
 ## When it does not fit
 
