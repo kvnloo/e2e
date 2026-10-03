@@ -520,7 +520,7 @@ function readRecordedAction(document: unknown): RecordedAction | undefined {
   switch (name) {
     case 'type': {
       const target = readDescriptor(raw['target']);
-      const value = readInputText(raw['value']);
+      const value = readTypingInputText(raw['value']);
       if (target === undefined || value === undefined) return undefined;
       return { name: 'type', summary, target, value };
     }
@@ -611,7 +611,7 @@ function readRecordedAction(document: unknown): RecordedAction | undefined {
     case 'back':
       return { name: 'back', summary };
     case 'typeText': {
-      const value = readInputText(raw['value']);
+      const value = readTypingInputText(raw['value']);
       if (value === undefined || typeof raw['replace'] !== 'boolean') return undefined;
       return { name: 'typeText', summary, value, replace: raw['replace'] };
     }
@@ -876,6 +876,12 @@ function readBoundedText(value: unknown, maxChars: number): string | undefined {
 function readInputPaths(value: unknown): readonly string[] | undefined {
   if (!Array.isArray(value) || value.length === 0 || value.length > MAX_TRACE_UPLOAD_PATHS) return undefined;
   return each(value, readInputText);
+}
+
+/** Typed text may be empty: an empty type/typeText input intentionally clears the field. */
+function readTypingInputText(value: unknown): string | undefined {
+  if (typeof value !== 'string' || value.length > MAX_TRACE_INPUT_CHARS) return undefined;
+  return value;
 }
 
 /** Verbatim replay input: bounded but never trimmed — whitespace can be the value. */
