@@ -55,8 +55,9 @@ describe('explore test candidates', () => {
       openApp: true,
     });
 
-    expect(source).toContain("test('Exercise checkout end to end', { session: \"admin\" }, async ({ app, agent }) => {");
-    expect(source).toContain("test.skip('exploration candidate: add independent deterministic verification before enabling')");
+    expect(source).toContain("test.skip('Exercise checkout end to end', async ({ app, agent }) => {");
+    expect(source).toContain('Source session: `admin`. Preserve it as a test option when enabling this candidate.');
+    expect(source).toContain('preserve any source agent/session options');
     expect(source).toContain('await app.open()');
     expect(source).toContain("await agent.act(\"Add the first product to the cart\")");
     expect(source).toContain('// VERIFY: independently prove this transition');
