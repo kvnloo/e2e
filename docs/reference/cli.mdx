@@ -557,6 +557,7 @@ assessment. The default goal is `Explore the app and find bugs`. See
 | `--headed` | boolean | `false` | Requests visible UI when the engine supports it. |
 | `--reporter <ids>` | comma-separated list | resolved config value | As for `run`. The exploration summary rows print under the `list` summary; `json` carries the record in the report. |
 | `--output <dir>` | string | config, else `.e2e` | As for `run`; a finding's evidence screenshot is one of the attempt's artifacts under `<output>/artifacts`. |
+| `--write-test <path>` | string | none | After a passed exploration, writes a skipped regression-test candidate inside the project. Existing files are never replaced. Passed charters become `agent.act()` seeds with explicit `VERIFY` notes; add independent deterministic checks before enabling the test. |
 | `--debug` | boolean | `false` | As for `run`: phase timings and the agent step table. |
 | `--ai-trace` | boolean | `false` | As for `run`. |
 | `--trace [mode]` | a recording mode | config | As for `run`: one trace of the whole exploration. A bare `--trace` is `on`; `retain-on-failure` keeps it only when the exploration did not pass. The exploration is one attempt, so `on-first-retry` and `on-all-retries` record nothing, and neither does the CI default: `CI=1 e2e explore` needs `--trace on` for a trace, and its plan-time notice says so. Put the goal before `--trace`, or write `--trace=<mode>`. |
@@ -582,6 +583,7 @@ on Ctrl-C.
 npx e2e explore
 npx e2e explore 'Explore the checkout flow like a first-time buyer and report anything off'
 npx e2e explore --target web --max-steps 4 --headed
+npx e2e explore 'Exercise checkout end to end' --write-test tests/checkout-candidate.e2e.ts
 npx e2e explore 'Hunt for broken forms and dead links' --agent thorough --video
 ```
 
@@ -589,6 +591,7 @@ npx e2e explore 'Hunt for broken forms and dead links' --agent thorough --video
 pnpm exec e2e explore
 pnpm exec e2e explore 'Explore the checkout flow like a first-time buyer and report anything off'
 pnpm exec e2e explore --target web --max-steps 4 --headed
+pnpm exec e2e explore 'Exercise checkout end to end' --write-test tests/checkout-candidate.e2e.ts
 pnpm exec e2e explore 'Hunt for broken forms and dead links' --agent thorough --video
 ```
 
@@ -596,6 +599,7 @@ pnpm exec e2e explore 'Hunt for broken forms and dead links' --agent thorough --
 bunx e2e explore
 bunx e2e explore 'Explore the checkout flow like a first-time buyer and report anything off'
 bunx e2e explore --target web --max-steps 4 --headed
+bunx e2e explore 'Exercise checkout end to end' --write-test tests/checkout-candidate.e2e.ts
 bunx e2e explore 'Hunt for broken forms and dead links' --agent thorough --video
 ```
 </CodeGroup>

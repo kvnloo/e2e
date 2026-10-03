@@ -101,6 +101,35 @@ The exploration is one attempt, so a retry mode (`on-first-retry`,
 prints a notice saying to pass `--trace on` (or `--video on`); put the goal
 before a bare `--trace` or `--video`.
 
+## Turn a passing exploration into a test candidate
+
+Pass `--write-test <path>` to preserve the passed charters as a reviewable
+test scaffold:
+
+<CodeGroup>
+```bash npm
+npx e2e explore 'Exercise checkout end to end' --write-test tests/checkout-candidate.e2e.ts
+```
+
+```bash pnpm
+pnpm exec e2e explore 'Exercise checkout end to end' --write-test tests/checkout-candidate.e2e.ts
+```
+
+```bash bun
+bunx e2e explore 'Exercise checkout end to end' --write-test tests/checkout-candidate.e2e.ts
+```
+</CodeGroup>
+
+A candidate is written only when the exploration passes, and an existing file
+is never replaced. The generated test is intentionally skipped. Each passed
+charter becomes an `agent.act()` seed followed by a `VERIFY` note. Replace
+every note with an independent deterministic assertion or other verifier
+before removing `test.skip(...)`.
+
+This boundary is deliberate: the agent saying a charter passed is discovery
+evidence, not an oracle. Failed, blocked, and exhausted charters are listed in
+the generated file but are not compiled into actions.
+
 ## Your config applies
 
 Explore reads `e2e.config.ts`, including the target, app command, model, and

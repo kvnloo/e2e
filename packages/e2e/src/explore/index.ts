@@ -22,6 +22,7 @@ import { run, type RunOutcome } from '../run/runner.ts';
 import { staticSecretLedger } from '../run/secrecy.ts';
 import type { AgentConfig, BuiltinReporter, E2EConfig, RecordingMode } from '../types.ts';
 import { createExploreBody } from './body.ts';
+import { resolveExploreCandidatePath, writeExploreCandidate } from './candidate.ts';
 import { explorerAgent, withFindingTool } from './executor.ts';
 import { signedInContext, type PlanAccount } from './plan.ts';
 import { ExploreState } from './state.ts';
@@ -69,6 +70,8 @@ export interface ExploreOptions {
   readonly reporters?: readonly BuiltinReporter[] | undefined;
   /** The results directory, `--output`, over the config's `output`. */
   readonly output?: string | undefined;
+  /** Write a skipped, reviewable test candidate after a passed exploration. Existing files are never replaced. */
+  readonly writeTest?: string | undefined;
   readonly debug?: boolean | undefined;
   readonly aiTrace?: boolean | undefined;
   /** Which attempts record a trace, `--trace [mode]`; the exploration is one attempt, so a retry mode records nothing. */
@@ -116,6 +119,7 @@ export async function explore(options: ExploreOptions = {}): Promise<ExploreOutc
   const resolveOptions = { projectRoot, env, cli: options.agent === undefined ? {} : { agents: [options.agent] } };
   const resolved = resolveConfig(raw, resolveOptions);
   const target = pickTarget(resolved.targets, options.target, notice);
+  const candidatePath = options.writeTest === undefined ? undefined : resolveExploreCandidatePath(projectRoot, options.writeTest);
   const accounts = credentialAccounts(resolved.credentials);
   // An exploration runs as exactly one agent: the one named, else `default`.
   const agentName = resolved.agentNames[0]!;
@@ -157,7 +161,21 @@ export async function explore(options: ExploreOptions = {}): Promise<ExploreOutc
     forceSignal: options.forceSignal,
     onEvent: options.onEvent,
   });
-  return { ...outcome, explore: state.snapshot() };
+  const snapshot = state.snapshot();
+  if (candidatePath !== undefined) {
+    if (outcome.status === 'passed') {
+      await writeExploreCandidate(candidatePath, snapshot, {
+        target: target.name,
+        agent: agentName,
+        session: options.session,
+        openApp: target.app.base !== undefined,
+      });
+      notice(`wrote skipped test candidate to ${options.writeTest}`);
+    } else {
+      notice(`not writing test candidate because exploration ended ${outcome.status}; only a passed exploration can be promoted`);
+    }
+  }
+  return { ...outcome, explore: snapshot };
 }
 
 async function loadRawConfig(options: ExploreOptions, cwd: string): Promise<{ raw: E2EConfig; projectRoot: string }> {

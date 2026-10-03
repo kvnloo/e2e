@@ -542,6 +542,7 @@ function createProgram(version: string, telemetry: Telemetry): Command {
     .optionsGroup('Output:')
     .option('--reporter <ids>', `comma-separated reporters: ${BUILTIN_REPORTERS.join(', ')}`, parseReporters)
     .option('--output <dir>', 'results directory: report, artifacts, sessions (default: output in the config, else .e2e)')
+    .option('--write-test <path>', 'after a passed exploration, write a skipped regression-test candidate to this project-relative path')
     .addOption(new Option('--artifacts <dir>').hideHelp().argParser(removedArtifactsFlag))
     .option('--debug', 'print phase timings and the agent step table to stderr')
     .option('--ai-trace', 'record every model call to <output>/ai-trace.json (unbox-ai)')
@@ -670,6 +671,7 @@ function createProgram(version: string, telemetry: Telemetry): Command {
           'e2e explore --target web --max-steps 4 --headed',
           "e2e explore --agent ux 'Review onboarding as a first-time user'",
           "e2e explore --session admin 'Explore the admin settings and find bugs'",
+          "e2e explore 'Exercise checkout end to end' --write-test tests/checkout-candidate.e2e.ts",
           "e2e explore 'Hunt for broken forms and dead links' --video",
         ]),
         '',
@@ -691,6 +693,7 @@ function createProgram(version: string, telemetry: Telemetry): Command {
           headed?: boolean;
           reporter?: Reporter[];
           output?: string;
+          writeTest?: string;
           debug?: boolean;
           aiTrace?: boolean;
           trace?: RecordingMode | true;
@@ -710,6 +713,7 @@ function createProgram(version: string, telemetry: Telemetry): Command {
             headed: options.headed,
             reporters: options.reporter,
             output: options.output,
+            writeTest: options.writeTest,
             debug: options.debug,
             aiTrace: options.aiTrace,
             trace: recordingOption(options.trace),
