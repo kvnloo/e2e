@@ -69,6 +69,15 @@ describe('trace-1 entry', () => {
     expect(entry.payload.startPath).toBe('/settings');
   });
 
+  it('round-trips empty inputs that clear text', () => {
+    const target = { role: 'textbox', name: 'Email' };
+    const actions: RecordedAction[] = [
+      { name: 'type', summary: 'clear textbox', target, value: '' },
+      { name: 'typeText', summary: 'clear focused textbox', value: '', replace: true },
+    ];
+    expect(entryOf(trace({ actions })).payload.actions).toEqual(actions);
+  });
+
   it('round-trips the postcondition: end path and end anchors', () => {
     const endAnchors = [
       { role: 'status', name: 'Marker', text: 'saved' },
@@ -112,6 +121,9 @@ describe('trace-1 entry', () => {
     ['unknown action name', withPayload({ actions: [{ ...tap, name: 'click' }] })],
     ['tap without a target', withPayload({ actions: [{ name: 'tap', summary: 'tap' }] })],
     ['type without a value', withPayload({ actions: [{ ...tap, name: 'type' }] })],
+    ['empty select value', withPayload({ actions: [{ name: 'select', summary: 'select', target: { role: 'combobox' }, value: '' }] })],
+    ['empty navigate url', withPayload({ actions: [{ name: 'navigate', summary: 'navigate', url: '' }] })],
+    ['empty scroll-until text', withPayload({ actions: [{ name: 'scrollUntil', summary: 'scroll', text: '', direction: 'down' }] })],
     [
       'oversized input value',
       withPayload({
