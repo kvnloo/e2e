@@ -142,9 +142,14 @@ describe('e2e explore', () => {
         return [{ toolName: 'complete_step', input: { status: 'passed', summary: 'Counter went to 1' } }];
       },
     });
-    const outcome = await runExplore(project, app, model);
+    const failedCandidate = 'tests/failed-explore-candidate.e2e.ts';
+    const outcome = await runExplore(project, app, model, { writeTest: failedCandidate });
 
     expect(outcome.report.run.errors).toEqual([]);
+    expect(existsSync(path.join(project.dir, failedCandidate))).toBe(false);
+    expect((outcome as unknown as { notices: string[] }).notices).toContain(
+      'not writing test candidate because exploration ended failed; only a passed exploration can be promoted',
+    );
     // The planner saw the goal each time, then the record of the step and its finding.
     expect(planPrompts).toHaveLength(2);
     expect(planPrompts[0]).toContain('Goal: Explore the home page and find bugs');
