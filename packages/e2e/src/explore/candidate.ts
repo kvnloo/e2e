@@ -26,6 +26,9 @@ export function resolveExploreCandidatePath(projectRoot: string, requested: stri
   if (trimmed === '') {
     throw new ConfigurationError('INVALID_CONFIG', '--write-test needs a non-empty path');
   }
+  if (path.isAbsolute(trimmed)) {
+    throw new ConfigurationError('INVALID_CONFIG', `--write-test must be relative to the project root, got ${JSON.stringify(requested)}`);
+  }
   const target = path.resolve(projectRoot, trimmed);
   if (relativeToProjectRoot(projectRoot, target) === undefined) {
     throw new ConfigurationError('INVALID_CONFIG', `--write-test must stay inside the project, got ${JSON.stringify(requested)}`);
