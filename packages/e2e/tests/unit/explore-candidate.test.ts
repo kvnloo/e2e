@@ -76,5 +76,6 @@ describe('explore test candidates', () => {
       writeExploreCandidate(target, record(), { target: 'web', agent: 'default', openApp: true }),
     ).rejects.toMatchObject({ code: 'INVALID_CONFIG' });
     expect(() => resolveExploreCandidatePath(root, '../outside.e2e.ts')).toThrow(/must stay inside the project/);
+    expect(() => resolveExploreCandidatePath(root, path.join(root, 'tests/absolute.e2e.ts'))).toThrow(/must be relative/);
   });
 });
