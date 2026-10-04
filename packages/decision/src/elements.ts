@@ -31,7 +31,8 @@ export interface ActionSpace {
   readonly elements: readonly Element[];
   /** Per operation: target key -> bound target. Only operations with at least one target appear. */
   readonly targets: ReadonlyMap<Operation, ReadonlyMap<string, Target>>;
-  readonly controls: ReadonlyMap<Control, Target>;
+  /** Per control: target key -> bound viewport or scroll-container action. */
+  readonly controls: ReadonlyMap<Control, ReadonlyMap<string, Target>>;
   /** Elements left out to stay under the per-question cap; scrolling can bring them into view. */
   readonly omitted: number;
   /** Non-interactive page text from the tree, without node ids, clipped to 6000 chars. */
@@ -73,11 +74,13 @@ export function actionSpace(ctx: StepExecutorContext, observation: SpaceObservat
     inViewport: boolean;
   }
   const rows: Row[] = [];
+  const scrollables: ExecutorNode[] = [];
   const pageText: string[] = [];
   /** Walks the tree, collecting interactive rows and page text. */
   const visit = (node: ExecutorNode, underNativeSelect: boolean): void => {
     if (node.states?.disabled !== true && node.states?.hidden !== true) {
       const operations: Operation[] = [];
+      if (node.states?.scrollable === true && intersects(node, observation.viewport)) scrollables.push(node);
       const role = node.role ?? '';
       const password = node.inputPurpose === 'password' || node.states?.secure === true;
       const nativeSelect = role === 'combobox' && (node.children ?? []).some((child) => child.role === 'option');
@@ -164,13 +167,29 @@ export function actionSpace(ctx: StepExecutorContext, observation: SpaceObservat
       operations: row.operations,
     };
   });
-  const controls = new Map<Control, Target>();
+  const controls = new Map<Control, Map<string, Target>>();
   if (verbs.has('scroll')) {
-    controls.set('scroll_up', { description: 'scroll viewport up', run: () => ctx.actions.scroll('up') });
-    controls.set('scroll_down', { description: 'scroll viewport down', run: () => ctx.actions.scroll('down') });
+    const scrollGroup = (direction: 'up' | 'down'): Map<string, Target> => {
+      const group = new Map<string, Target>();
+      group.set('viewport', {
+        description: `scroll viewport ${direction}`,
+        run: () => ctx.actions.scroll(direction),
+      });
+      // One question must stay inside TypeSafe's choice cap. The viewport is
+      // always one choice; scrollable nodes are engine-proven candidates.
+      for (const node of scrollables.slice(0, MAX_CHOICES - 1)) {
+        group.set(`node:${node.id}`, {
+          description: `scroll ${scrollTargetLabel(node)} ${direction}`,
+          run: () => ctx.actions.scroll(direction, { id: node.id }),
+        });
+      }
+      return group;
+    };
+    controls.set('scroll_up', scrollGroup('up'));
+    controls.set('scroll_down', scrollGroup('down'));
   }
   if (verbs.has('back')) {
-    controls.set('back', { description: 'back one step in history', run: () => ctx.actions.back() });
+    controls.set('back', new Map([['history', { description: 'back one step in history', run: () => ctx.actions.back() }]]));
   }
   return {
     elements,
@@ -204,6 +223,27 @@ function bind(node: ExecutorNode, operation: Operation, label: string, ctx: Step
 /** Label the model reads: name, placeholder, or text. */
 function nodeLabel(node: ExecutorNode): string {
   return node.name ?? node.attributes?.['placeholder'] ?? node.text ?? '';
+}
+
+/** Human-readable scroll target without platform selectors or node ids. */
+function scrollTargetLabel(node: ExecutorNode): string {
+  const own = nodeLabel(node).trim();
+  if (own !== '') return `${node.role ?? 'container'} ${JSON.stringify(clip(own, 80))}`;
+  const descendants: string[] = [];
+  const visit = (current: ExecutorNode): void => {
+    if (descendants.length >= 2) return;
+    for (const child of current.children ?? []) {
+      const label = nodeLabel(child).trim();
+      if (label !== '') descendants.push(clip(label, 60));
+      if (descendants.length >= 2) return;
+      visit(child);
+      if (descendants.length >= 2) return;
+    }
+  };
+  visit(node);
+  return descendants.length === 0
+    ? (node.role ?? 'scroll container')
+    : `${node.role ?? 'container'} containing ${descendants.map((label) => JSON.stringify(label)).join(', ')}`;
 }
 
 /**
