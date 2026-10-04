@@ -1132,6 +1132,21 @@ export const readSemanticsFunction = <Mode extends SemanticMode>(
     return role !== null && ARIA_DISABLED_ROLES.indexOf(role) !== -1 && ariaDisabledInChain(el);
   };
 
+  /**
+   * Whether a wheel/swipe started inside this element can move the element's
+   * own scroll surface. This is layout evidence from the platform, not a role
+   * guess: content must exceed the client box on an axis whose computed
+   * overflow accepts user scrolling.
+   */
+  const isScrollable = (el: Element, style: CSSStyleDeclaration | undefined): boolean => {
+    if (style === undefined) return false;
+    const accepts = (value: string): boolean => value === 'auto' || value === 'scroll' || value === 'overlay';
+    return (
+      (accepts(style.overflowY) && el.scrollHeight > el.clientHeight + 1) ||
+      (accepts(style.overflowX) && el.scrollWidth > el.clientWidth + 1)
+    );
+  };
+
   const describe = (el: Element, style = styleOf(el)): RawNodeData => {
     const tag = el.tagName.toLowerCase();
     const autocomplete = (el.getAttribute('autocomplete') ?? '').toLowerCase();
@@ -1263,6 +1278,7 @@ export const readSemanticsFunction = <Mode extends SemanticMode>(
         focused: focusedElement === el,
         hidden: isHidden(el, style),
         secure,
+        scrollable: isScrollable(el, style),
       },
       level,
       attributes,
@@ -1309,7 +1325,8 @@ export const readSemanticsFunction = <Mode extends SemanticMode>(
   };
 
   /** True when a node carries semantics worth sending to a model. */
-  const isInteresting = (el: Element): boolean => {
+  const isInteresting = (el: Element, style: CSSStyleDeclaration | undefined): boolean => {
+    if (isScrollable(el, style)) return true;
     if (el.hasAttribute(options.testIdAttribute)) return true;
     if (implicitRole(el) !== null && !isPresentational(el)) return true;
     if (accessibleName(el) !== null) return true;
@@ -1351,7 +1368,7 @@ export const readSemanticsFunction = <Mode extends SemanticMode>(
     let nextParent = parent;
     // An empty painted rectangle carries no semantics to be "interesting" by and
     // is still something a person sees and aims at; `roleOf` names it `box`.
-    if (!hidden && (isInteresting(el) || isVisibleEmptyBox(el))) {
+    if (!hidden && (isInteresting(el, style) || isVisibleEmptyBox(el))) {
       if (nodes.length >= maxNodes) {
         truncated = true;
         return;

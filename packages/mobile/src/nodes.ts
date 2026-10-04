@@ -8,6 +8,7 @@
  */
 
 import type { SnapshotNode } from 'agent-device';
+import { isScrollableNodeLike } from 'agent-device/contracts';
 import type { SemanticNode, ViewportSize } from 'e2e/engine';
 
 /**
@@ -425,6 +426,7 @@ export function projectSnapshot(raw: readonly RawNode[], options: { readonly min
       ...(source.focused === true ? { focused: true } : {}),
       ...(source.visibleToUser === false ? { hidden: true } : {}),
       ...(secure ? { secure: true } : {}),
+      ...(isScrollableNodeLike(source) ? { scrollable: true } : {}),
       ...(checked === undefined ? {} : { checked }),
       ...(spelled?.states.expanded === undefined ? {} : { expanded: spelled.states.expanded }),
     };

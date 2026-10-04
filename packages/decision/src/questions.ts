@@ -86,6 +86,13 @@ export function decisionRequest(
     }
     questions[`${operation}_target`] = choice({ operation, rules: TARGET }, options);
   }
+  for (const [control, targets] of space.controls) {
+    if (targets.size < 2) continue;
+    questions[`${control}_target`] = choice(
+      { operation: control, rules: TARGET },
+      Object.fromEntries([...targets].map(([key, target]) => [key, target.description])),
+    );
+  }
   if (space.targets.has('typeSecret') && ctx.step.secrets.length >= 2) {
     const secrets: Record<string, JsonValue | null> = {};
     for (const secret of ctx.step.secrets) secrets[secret.name] = secret.purpose;
