@@ -47,7 +47,7 @@ export interface RawNodeData {
     hidden: boolean;
     secure: boolean;
     /** True when this element owns a scroll surface with content beyond its client box. */
-    scrollable: boolean;
+    scrollable?: boolean;
   };
   /** Heading level of a heading: `aria-level`, else the digit of `h1` through `h6`; null for anything else. */
   level: number | null;
