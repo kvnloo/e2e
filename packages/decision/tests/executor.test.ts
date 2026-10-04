@@ -265,6 +265,31 @@ describe('terminal checks', () => {
       { element: 'Large', role: 'option' },
     ]);
   });
+  it('asks which scroll surface to move and dispatches the chosen container', async () => {
+    const tree: ExecutorNode = { id: 'root', children: [
+      {
+        id: 'feed',
+        role: 'group',
+        states: { scrollable: true },
+        rect: { x: 20, y: 20, width: 760, height: 480 },
+        children: [{ id: 'row', role: 'text', text: 'Item 1' }],
+      },
+    ] };
+    const { model, requests } = scriptedEvaluation((id, keys, call) => {
+      if (id === 'operation') return { choice: call === 0 ? 'scroll_down' : 'done' };
+      if (id === 'scroll_down_target') return { choice: 'node:feed' };
+      if (id === 'verdict') return { choice: 'holds' };
+      return { choice: keys[0] ?? '' };
+    });
+    const fixture = context({ tree });
+    const verdict = await decisionExecutor({ model }).runStep(fixture.ctx);
+    expect(verdict).toMatchObject({ status: 'passed' });
+    expect(requests[0]?.questions['scroll_down_target']?.criteria).toMatchObject({
+      viewport: 'scroll viewport down',
+      'node:feed': expect.stringContaining('Item 1'),
+    });
+    expect(fixture.actions.scroll).toHaveBeenCalledWith('down', { id: 'feed' });
+  });
 });
 
 describe('guard rails', () => {
