@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { promisify } from "node:util";
-import { defineEngine, type EngineHandle, type SemanticNode } from "e2e/engine";
+import { defineEngine, resolveExpression, type EngineHandle, type SemanticNode } from "e2e/engine";
 import { toolCards, type TernToolCard } from "./tsp.ts";
 
 const exec = promisify(execFile);
@@ -51,7 +51,7 @@ export function ternEngine(options: TernOptions = {}): EngineHandle {
 
   async function snapshot(): Promise<SemanticNode[]> {
     if (!pane) return [];
-    const capture = await tern(["capture", "--surfaces", pane]);
+    const capture = await tern(["capture", "--scrollback", pane]);
     const record = options.record ? await readFile(options.record, "utf8") : "";
     return [...cardNodes(toolCards(record)), ...textNodes(capture)];
   }
@@ -70,14 +70,7 @@ export function ternEngine(options: TernOptions = {}): EngineHandle {
       };
     },
     async locate(expression) {
-      const nodes = await snapshot();
-      const name = "name" in expression ? expression.name : undefined;
-      const role = "role" in expression ? expression.role : undefined;
-      return nodes.filter((node) => {
-        if (role && node.role !== role) return false;
-        if (typeof name === "string" && node.name !== name && node.text !== name) return false;
-        return true;
-      });
+      return resolveExpression(expression, await snapshot());
     },
     async perform(_ref, action) {
       if (!pane) throw new Error("tern engine has no pane");
