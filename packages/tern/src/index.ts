@@ -7,7 +7,11 @@ import { toolCards, type TernToolCard } from "./tsp.ts";
 const exec = promisify(execFile);
 
 export interface TernOptions {
-  readonly pane: string;
+  /** Program the attempt launches in a new pane. Default: a shell. */
+  readonly command?: readonly string[];
+  /** Observe this pane instead of launching one. */
+  readonly pane?: string;
+  /** Optional TSP record. Tool heads come from this file, not from cell text. */
   readonly record?: string;
 }
 
@@ -23,7 +27,7 @@ function textNodes(capture: string): SemanticNode[] {
     .filter((line) => line.length > 0)
     .map((line, index) => ({
       ref: { id: `line-${index}`, revision: "" },
-      role: "text",
+      role: "status",
       name: line,
       text: line,
     }));
@@ -32,7 +36,7 @@ function textNodes(capture: string): SemanticNode[] {
 function cardNodes(cards: TernToolCard[]): SemanticNode[] {
   return cards.map((card) => ({
     ref: { id: card.id || `${card.name}:${card.target}`, revision: "" },
-    role: "tool",
+    role: "status",
     name: card.name,
     text: card.target,
     testId: card.id,
@@ -40,13 +44,18 @@ function cardNodes(cards: TernToolCard[]): SemanticNode[] {
   }));
 }
 
-/** One Tern pane. Tool heads come from the TSP record, not from cell text. */
-export function ternEngine(options: TernOptions): EngineHandle {
+/** One Tern pane. The runner launches, observes, and types through the tern CLI. */
+export function ternEngine(options: TernOptions = {}): EngineHandle {
+  let pane = options.pane;
+  let owned = false;
+
   async function snapshot(): Promise<SemanticNode[]> {
-    const capture = await tern(["capture", "--surfaces", options.pane]);
+    if (!pane) return [];
+    const capture = await tern(["capture", "--surfaces", pane]);
     const record = options.record ? await readFile(options.record, "utf8") : "";
     return [...cardNodes(toolCards(record)), ...textNodes(capture)];
   }
+
   return defineEngine({
     name: "tern",
     version: "0.0.1",
@@ -55,8 +64,8 @@ export function ternEngine(options: TernOptions): EngineHandle {
     actions: ["press", "fill"],
     async observe() {
       return {
-        location: `tern:${options.pane}`,
-        root: { ref: { id: "root", revision: "" }, role: "window", name: options.pane, children: await snapshot() },
+        location: pane ? `tern:${pane}` : "tern:",
+        root: { ref: { id: "root", revision: "" }, role: "window", name: pane ?? "tern", children: await snapshot() },
         viewport: { width: 80, height: 24, scale: 1 },
       };
     },
@@ -70,24 +79,47 @@ export function ternEngine(options: TernOptions): EngineHandle {
         return true;
       });
     },
-    async perform(ref, action) {
+    async perform(_ref, action) {
+      if (!pane) throw new Error("tern engine has no pane");
       if (action.kind === "press") {
-        await tern(["send", options.pane, "keys", action.key]);
+        await tern(["send", pane, "keys", action.key]);
         return;
       }
       if (action.kind === "fill") {
-        await tern(["send", options.pane, "text", action.value]);
+        await tern(["send", pane, "text", action.value]);
         return;
       }
-      throw new Error(`tern engine does not perform ${action.kind} on ${ref.id}`);
+      throw new Error(`tern engine does not perform ${action.kind}`);
     },
     keyboard: {
       async type(text) {
-        await tern(["send", options.pane, "text", text]);
+        if (!pane) throw new Error("tern engine has no pane");
+        await tern(["send", pane, "text", text]);
       },
       async press(key) {
-        await tern(["send", options.pane, "keys", key]);
+        if (!pane) throw new Error("tern engine has no pane");
+        await tern(["send", pane, "keys", key]);
       },
+    },
+    session: {
+      async restart() {
+        if (options.pane) {
+          pane = options.pane;
+          return;
+        }
+        const command = options.command ?? ["zsh"];
+        const id = (await tern(["new", "tab", "--keep-open", "--", ...command])).trim().split(/\s+/)[0];
+        if (!id) throw new Error("tern new tab returned no pane id");
+        pane = id;
+        owned = true;
+      },
+    },
+    async endAttempt() {
+      if (owned && pane) {
+        await tern(["close", pane]).catch(() => undefined);
+      }
+      if (!options.pane) pane = undefined;
+      owned = false;
     },
   });
 }
