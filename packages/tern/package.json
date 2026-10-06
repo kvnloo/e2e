@@ -1,0 +1,26 @@
+{
+  "name": "@e2e-dev/tern",
+  "version": "0.0.1",
+  "description": "Tern engine for e2e: drive a named pane and read native tool cards from a TSP record",
+  "license": "Apache-2.0",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    }
+  },
+  "scripts": {
+    "test": "vitest run"
+  },
+  "peerDependencies": {
+    "e2e": ">=0.15.0 <1"
+  },
+  "devDependencies": {
+    "e2e": "workspace:*",
+    "vitest": "5.0.1"
+  },
+  "engines": {
+    "node": ">=22.12.0"
+  }
+}
