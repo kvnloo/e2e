@@ -51,7 +51,9 @@ export function ternEngine(options: TernOptions = {}): EngineHandle {
 
   async function snapshot(): Promise<SemanticNode[]> {
     if (!pane) return [];
-    const capture = await tern(["capture", "--scrollback", pane]);
+    const surface = await tern(["capture", "--surfaces", pane]).catch(() => "");
+    const scroll = await tern(["capture", "--scrollback", pane]).catch(() => "");
+    const capture = `${surface}\n${scroll}`;
     const record = options.record ? await readFile(options.record, "utf8") : "";
     return [...cardNodes(toolCards(record)), ...textNodes(capture)];
   }
