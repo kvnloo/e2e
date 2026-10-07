@@ -11,6 +11,8 @@ import type { TernRequest, TernLease } from '@e2e-dev/tern';
 import { nativeOptions } from '../native-options.ts';
 
 const childMode = process.argv[2] === 'worker';
+const workerSignal=process.env.E2E_NATIVE_WORKER_SIGNAL??'SIGKILL';
+assert(['SIGKILL','SIGTERM','SIGINT'].includes(workerSignal),'only explicit worker termination fixtures are allowed');
 const directory = childMode ? process.env.E2E_NATIVE_ROOT! : await mkdtemp(join(tmpdir(), 'e2e-lc-'));
 const runId = childMode ? process.env.E2E_NATIVE_RUN! : randomUUID();
 const provider = sway({ ...nativeOptions(), root: directory });
@@ -38,7 +40,7 @@ if (childMode) {
       worker.once('exit', code => { clearTimeout(timer); reject(new Error(`Worker exited before readiness: ${code}`)); });
     });
     assert(receipt.client);
-    const exited = once(worker, 'exit'); worker.kill('SIGKILL'); await exited;
+    const exited = once(worker, 'exit'); worker.kill(workerSignal as NodeJS.Signals); await exited;
     const before = await readFile(`/proc/${receipt.client.pid}/stat`, 'utf8');
     assert.equal(before.slice(before.lastIndexOf(')') + 2).split(' ')[19], receipt.client.start, 'native client survives worker death');
     await provider.sweep!({ runId, targetName: request.targetName, env: request.env }, cleanup);

@@ -16,6 +16,7 @@ export interface OwnedWaylandParent {
   readonly waylandDisplay: string;
   /** The parent owns silent placement policy; no uncontained direct host spawn. */
   launch(binary: string, args: readonly string[], env: Readonly<Record<string, string>>, identityFile: string, signal: AbortSignal): Promise<ProcessIdentity>;
+  guard?(signal: AbortSignal): Promise<() => Promise<void>>;
 }
 export interface SwayOptions {
   readonly binaries: { readonly sway: string; readonly swaymsg: string; readonly tern: string; readonly grim: string; readonly input: string };
@@ -135,8 +136,8 @@ export async function swayDisplay(options: SwayOptions, request: TernRequest): P
       const { stdout } = await exec(options.binaries.swaymsg, ['--socket', env.SWAYSOCK!, '--type', type, '--raw'], { env, signal, timeout: 5000, maxBuffer: 8 * 1024 * 1024 });
       return JSON.parse(stdout) as T;
     };
-    const outputs = await ipc<Array<{ name: string; active: boolean }>>('get_outputs', request.signal);
-    if (outputs.length !== 1 || outputs[0]?.name !== output || !outputs[0].active) throw new EngineError('NOT_ACTIONABLE', 'Isolated output identity differs from the lease', { retryable: false });
+    const outputs = await ipc<Array<{ name: string; active: boolean; rect: { width: number; height: number }; scale: number }>>('get_outputs', request.signal);
+    if (outputs.length !== 1 || outputs[0]?.name !== output || !outputs[0].active || outputs[0].rect.width !== size.width || outputs[0].rect.height !== size.height || outputs[0].scale !== 1) throw new EngineError('NOT_ACTIONABLE', 'Isolated output identity or measured geometry differs from the lease', { retryable: false });
     const seats = await ipc<Seat[]>('get_seats', request.signal);
     if (seats.filter(item => item.name === seat).length !== 1) throw new EngineError('NOT_ACTIONABLE', 'Named isolated input seat is unavailable', { retryable: false });
     const names = await readdir(env.XDG_RUNTIME_DIR!);
@@ -184,6 +185,10 @@ export async function swayDisplay(options: SwayOptions, request: TernRequest): P
     let clientIdentity: ProcessIdentity | undefined;
     const assertFocus = async (signal: AbortSignal): Promise<void> => {
       if (!client || !clientIdentity || !await stillOwned(clientIdentity) || (await ipc<Seat[]>('get_seats', signal)).find(item => item.name === seat)?.focus !== client.id) throw new EngineError('NOT_ACTIONABLE', 'Named seat does not focus the leased native client generation', { retryable: false });
+      const pending=[await ipc<Container>('get_tree',signal)], matching: Container[]=[];
+      while(pending.length){const node=pending.pop()!;if(node.id===client.id&&node.pid===clientIdentity.pid)matching.push(node);pending.push(...node.nodes??[],...node.floating_nodes??[]);}
+      if(matching.length!==1) throw new EngineError('NOT_ACTIONABLE','Owned native window geometry is not unique',{retryable:false});
+      client=matching[0]!;
     };
     const pointer = async (x: number, y: number, button: boolean, signal: AbortSignal): Promise<void> => {
       if (![x, y].every(Number.isFinite) || x < 0 || y < 0 || x >= size.width || y >= size.height) throw new EngineError('NOT_ACTIONABLE', 'Pointer is outside the isolated output', { retryable: false });
@@ -191,7 +196,7 @@ export async function swayDisplay(options: SwayOptions, request: TernRequest): P
     };
     return { id: directory, directory, seat, output, env, spawn: launch, release, pointer,
       get nativeClient() { return clientIdentity; },
-      async tap(x, y, signal) { await assertFocus(signal); await pointer(x, y, true, signal); },
+      async tap(x, y, signal) { await assertFocus(signal); await pointer(client!.rect.x+x, client!.rect.y+y, true, signal); },
       async focusClient(pid, signal) {
         const tree = await ipc<Container>('get_tree', signal);
         const pending = [tree]; const matching: Container[] = [];
@@ -263,7 +268,12 @@ export function sway(options: SwayOptions): TernProvider {
         if (!display.nativeClient) throw new EngineError('INVALID_STATE', 'Owned native client identity was not established', { retryable: false });
         await mkdir(request.artifactsDir, { recursive: true, mode: 0o700 });
         await writeFile(join(request.artifactsDir, 'native-client.json'), JSON.stringify({ client: display.nativeClient, seat: display.seat, output: display.output, lease: display.id }), { mode: 0o600 });
-        return { id: display.id, pane: String(state.focused.id), mode: 'native', control, binary: options.binaries.tern, env: display.env, client: display.nativeClient, input: { type: display.type, press: display.press, tap: display.tap } } satisfies TernLease;
+        return { id: display.id, pane: String(state.focused.id), mode: 'native', control, binary: options.binaries.tern, env: display.env, client: display.nativeClient, capture: display.capture, guard: async signal => {
+          const client=display.nativeClient;
+          if(!client||!await stillOwned(client)) throw new EngineError('NOT_ACTIONABLE','Owned native client generation changed',{retryable:false});
+          const after=await options.parent?.guard?.(signal);
+          return async()=>{ if(!await stillOwned(client)) throw new EngineError('ACTION_MAY_HAVE_COMMITTED','Owned native client exited across the operation',{retryable:false}); await after?.(); };
+        }, input: { type: display.type, press: display.press, tap: display.tap } } satisfies TernLease;
       } catch (error) { await display.release({ signal: AbortSignal.timeout(15000), timeoutMs: 15000 } as EngineCleanupContext); displays.delete(display.id); throw error; }
     },
     async release(lease, context) { const display = displays.get(lease.id); if (!display) return; await display.release(context); displays.delete(lease.id); },
