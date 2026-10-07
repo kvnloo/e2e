@@ -221,7 +221,6 @@ export function ternEngine(options: TernOptions = {}): EngineHandle {
     switch (action.kind) {
       case "tap":
       case "focus":
-      case "scrollIntoView":
         await click(id, "left", 1);
         return;
       case "doubleTap":
@@ -265,7 +264,7 @@ export function ternEngine(options: TernOptions = {}): EngineHandle {
     version: ownVersion(),
     spiVersion: 1,
     platform: "desktop",
-    actions: ["tap", "doubleTap", "secondaryTap", "focus", "fill", "clear", "press", "swipe", "scrollIntoView"],
+    actions: ["tap", "doubleTap", "secondaryTap", "focus", "fill", "clear", "press", "swipe"],
     async observe() {
       const snap = await snapshot();
       return {
