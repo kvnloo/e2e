@@ -8,7 +8,7 @@ description: Lease a private Linux display and persistent named-seat input witho
 ```ts
 import { ternEngine } from '@e2e-dev/tern';
 import { sway } from '@e2e-dev/sway';
-const engine = ternEngine({ provider: sway({ binaries: {
+export const engine = ternEngine({ provider: sway({ binaries: {
   sway: '/usr/bin/sway', swaymsg: '/usr/bin/swaymsg', grim: '/usr/bin/grim',
   tern: '/opt/tern/tern', input: '/opt/e2e/input',
 } }) });

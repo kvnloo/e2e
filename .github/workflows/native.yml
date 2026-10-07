@@ -43,6 +43,7 @@ jobs:
           E2E_TERN_BINARY: ${{ runner.temp }}/tern-runtime/tern
           E2E_INPUT_BINARY: ${{ runner.temp }}/e2e-input
         run: |
+          node --test apps/tern-testbed/scripts/failure-report.test.ts
           node packages/e2e/dist/cli/bin.js run --config apps/tern-testbed/e2e.sway.config.ts --output apps/tern-testbed/.e2e --workers 1 --retries 0 --no-cache --reporter list,markdown
           for signal in SIGKILL SIGTERM SIGINT; do E2E_NATIVE_WORKER_SIGNAL="$signal" node apps/tern-testbed/scripts/lifecycle.ts; done
           node apps/tern-testbed/scripts/isolation.ts

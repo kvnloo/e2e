@@ -6,6 +6,7 @@
 #include <sys/wait.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
+#include <sys/file.h>
 #include <dirent.h>
 #include <sys/socket.h>
 #include <sys/un.h>
@@ -64,7 +65,17 @@ static const struct wl_registry_listener registry_listener = { global, global_re
 
 /* A supervisor owns descendants even if Tern forks a daemon/new session. It
  * writes identity before fork, and never uses names or the host process list. */
-static void stop_descendants(pid_t parent, bool force) {
+static bool process_info(pid_t pid, unsigned long long *start, pid_t *parent) {
+  char path[64], value[4096]; snprintf(path,sizeof path,"/proc/%ld/stat",(long)pid);
+  FILE *file=fopen(path,"r");if(!file)return false;
+  if(!fgets(value,sizeof value,file)){fclose(file);return false;}fclose(file);
+  char *fields=strrchr(value,')');if(!fields)return false;fields+=2;
+  char *save=NULL,*field=strtok_r(fields," ",&save);unsigned index=0;
+  while(field){if(index==1)*parent=(pid_t)strtol(field,NULL,10);if(index==19){*start=strtoull(field,NULL,10);return *start!=0;}field=strtok_r(NULL," ",&save);index++;}return false;
+}
+static void stop_descendants(pid_t parent, unsigned long long expected, bool force) {
+  unsigned long long current;pid_t ignored;
+  if(!process_info(parent,&current,&ignored)||current!=expected)return;
   char tasks_path[64]; snprintf(tasks_path, sizeof tasks_path, "/proc/%ld/task", (long)parent);
   DIR *tasks = opendir(tasks_path); if (!tasks) return;
   struct dirent *task;
@@ -74,18 +85,35 @@ static void stop_descendants(pid_t parent, bool force) {
     FILE *file = fopen(path, "r"); if (!file) continue;
     long child;
     while (fscanf(file, "%ld", &child) == 1) {
-      int pidfd = (int)syscall(SYS_pidfd_open, (pid_t)child, 0);
-      if (pidfd < 0) continue;
-      stop_descendants((pid_t)child, force);
-      syscall(SYS_pidfd_send_signal, pidfd, force ? SIGKILL : SIGTERM, NULL, 0);
+      unsigned long long before,after;pid_t ppid,after_parent;
+      if(!process_info((pid_t)child,&before,&ppid)||ppid!=parent)continue;
+      int pidfd = (int)syscall(SYS_pidfd_open, (pid_t)child, 0);if(pidfd<0)continue;
+      if(!process_info((pid_t)child,&after,&after_parent)||before!=after||after_parent!=parent||!process_info(parent,&current,&ignored)||current!=expected){close(pidfd);continue;}
+      stop_descendants((pid_t)child,before,force);
+      struct pollfd pinned={pidfd,POLLIN,0};
+      if(poll(&pinned,1,0)==0&&process_info((pid_t)child,&after,&after_parent)&&after==before&&after_parent==parent&&process_info(parent,&current,&ignored)&&current==expected) syscall(SYS_pidfd_send_signal,pidfd,force?SIGKILL:SIGTERM,NULL,0);
       close(pidfd);
     }
     fclose(file);
   }
   closedir(tasks);
 }
+/* Cleanup marks a directory closed under the same lock held across publish/fork.
+ * A late supervisor must either publish before cleanup's scan or refuse to start. */
+static int lifecycle_lock(const char *identity_path, bool close_lease) {
+  char directory[4096];if(strlen(identity_path)>=sizeof directory)return -1;strcpy(directory,identity_path);
+  char *slash=strrchr(directory,'/');if(!slash||slash==directory)return -1;*slash=0;
+  int dir=open(directory,O_RDONLY|O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC);if(dir<0)return -1;
+  struct stat owner;if(fstat(dir,&owner)<0||owner.st_uid!=getuid()||(owner.st_mode&077)!=0){close(dir);return -1;}
+  int lock=openat(dir,".lifecycle.lock",O_RDWR|O_CREAT|O_NOFOLLOW|O_CLOEXEC,0600);
+  if(lock<0||flock(lock,LOCK_EX)<0){if(lock>=0)close(lock);close(dir);return -1;}
+  if(close_lease){int marker=openat(dir,".closing",O_WRONLY|O_CREAT|O_EXCL|O_NOFOLLOW|O_CLOEXEC,0600);if(marker<0&&errno!=EEXIST){close(lock);close(dir);return -1;}if(marker>=0){fsync(marker);close(marker);}fsync(dir);}
+  else if(faccessat(dir,".closing",F_OK,AT_SYMLINK_NOFOLLOW)==0){close(lock);close(dir);return -1;}
+  close(dir);return lock;
+}
 static int supervise(int argc, char **argv) {
   if (argc < 4 || prctl(PR_SET_CHILD_SUBREAPER, 1) < 0) return 2;
+  int lock=lifecycle_lock(argv[2],false);if(lock<0)return 2;
   char stat_path[64], stat_text[4096]; snprintf(stat_path, sizeof stat_path, "/proc/%ld/stat", (long)getpid());
   FILE *stat_file = fopen(stat_path, "r"); if (!stat_file || !fgets(stat_text, sizeof stat_text, stat_file)) return 2; fclose(stat_file);
   char *fields = strrchr(stat_text, ')'); if (!fields) return 2; fields += 2;
@@ -98,9 +126,11 @@ static int supervise(int argc, char **argv) {
   int fd = open(temporary, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0600); if (fd < 0) return 2;
   if (dprintf(fd, "{\"pid\":%ld,\"start\":\"%s\"}", (long)getpid(), field) < 0 || fsync(fd) < 0) { close(fd); return 2; } close(fd);
   if (rename(temporary, argv[2]) < 0) return 2;
-  if (interrupted) return 0;
-  pid_t child = fork(); if (child < 0) return 2;
-  if (child == 0) { signal(SIGTERM, SIG_DFL); signal(SIGINT, SIG_DFL); if (setsid() < 0) _exit(126); execv(argv[3], &argv[3]); _exit(127); }
+  if (interrupted) {close(lock);return 0;}
+  pid_t child = fork(); if (child < 0) {close(lock);return 2;}
+  if (child == 0) {close(lock);signal(SIGTERM, SIG_DFL); signal(SIGINT, SIG_DFL); if (setsid() < 0) _exit(126); execv(argv[3], &argv[3]); _exit(127); }
+  close(lock);
+  unsigned long long own_start;pid_t own_parent;if(!process_info(getpid(),&own_start,&own_parent))return 2;
   /* Stay alive after an initial launcher exits while an adopted daemon lives. */
   while (!interrupted) {
     int status; pid_t result = waitpid(-1, &status, WNOHANG);
@@ -109,7 +139,7 @@ static int supervise(int argc, char **argv) {
   }
   uint32_t deadline = clock_ms() + 10000;
   for (;;) {
-    stop_descendants(getpid(), (int32_t)(clock_ms() - deadline) >= 0);
+    stop_descendants(getpid(),own_start,(int32_t)(clock_ms() - deadline) >= 0);
     while (waitpid(-1, NULL, WNOHANG) > 0) {}
     if (errno == ECHILD) return 0;
     struct timespec pause = { 0, 10000000 }; nanosleep(&pause, NULL);
@@ -221,7 +251,9 @@ static int send_key(const char *symbol, unsigned requested_modifiers) {
   return wl_display_roundtrip(display) < 0 ? 2 : 0;
 }
 static int text(FILE *connection, size_t remaining) {
+  struct pollfd peer={fileno(connection),POLLRDHUP|POLLHUP|POLLERR,0};
   while (remaining && !interrupted) {
+    if(poll(&peer,1,0)<0||peer.revents&(POLLRDHUP|POLLHUP|POLLERR))return 2;
     int first = fgetc(connection); remaining--;
     if (first <= 0) return 2;
     uint32_t scalar, minimum; unsigned extra;
@@ -239,6 +271,7 @@ static int text(FILE *connection, size_t remaining) {
     if (scalar < minimum || scalar > 0x10ffff || (scalar >= 0xd800 && scalar <= 0xdfff)) return 2;
     char symbol[24]; snprintf(symbol, sizeof symbol, "U%04X", scalar);
     const char *key = scalar == '\n' ? "Return" : scalar == '\t' ? "Tab" : symbol;
+    if(poll(&peer,1,0)<0||peer.revents&(POLLRDHUP|POLLHUP|POLLERR))return 2;
     if (send_key(key, 0)) return 2;
   }
   return interrupted ? 2 : 0;
@@ -288,6 +321,7 @@ int main(int argc, char **argv) {
   struct sigaction action = { .sa_handler = interrupt }; sigemptyset(&action.sa_mask);
   sigaction(SIGTERM, &action, NULL); sigaction(SIGINT, &action, NULL); signal(SIGPIPE, SIG_IGN);
   if (argc > 1 && strcmp(argv[1], "supervise") == 0) return supervise(argc, argv);
+  if(argc==3&&strcmp(argv[1],"close")==0){int lock=lifecycle_lock(argv[2],true);if(lock<0)return 2;close(lock);return 0;}
   if (argc == 4 && strcmp(argv[1], "stop") == 0) return stop_owned(argv[2], argv[3]);
   if (argc != 4 || strcmp(argv[1], "serve") != 0 || !getenv("XDG_RUNTIME_DIR") || !getenv("WAYLAND_DISPLAY")) return 2;
   wanted_seat = argv[2]; display = wl_display_connect(NULL); if (!display) return 2;

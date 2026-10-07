@@ -22,3 +22,24 @@ export async function childPids(pid: number): Promise<number[]> {
   const children = await Promise.all(tasks.map(task => readFile(join('/proc', String(pid), 'task', task, 'children'), 'utf8')));
   return [...new Set(children.flatMap(text => text.trim().split(/\s+/).filter(Boolean).map(Number)))];
 }
+
+/** Guest-authored launch receipts are not authority: prove the current kernel ancestry. */
+export async function ownedDescendant(identity:ProcessIdentity,root:ProcessIdentity):Promise<boolean>{
+  if(!Number.isSafeInteger(identity.pid)||identity.pid<=0||!Number.isSafeInteger(root.pid)||root.pid<=0||!await stillOwned(identity)||!await stillOwned(root))return false;
+  const chain:Array<{identity:ProcessIdentity;parent:number}>=[];
+  let pid=identity.pid;
+  try{
+    for(let depth=0;depth<256&&pid>1;depth++){
+      const text=await readFile(`/proc/${pid}/stat`,'utf8'),fields=text.slice(text.lastIndexOf(')')+2).split(' ');
+      const current={pid,start:fields[19]!},parent=Number(fields[1]);if(!current.start||!Number.isSafeInteger(parent)||chain.some(item=>item.identity.pid===pid))return false;
+      chain.push({identity:current,parent});
+      if(pid===root.pid){
+        if(current.start!==root.start||chain[0]!.identity.start!==identity.start)return false;
+        for(const item of chain){const again=await readFile(`/proc/${item.identity.pid}/stat`,'utf8'),parts=again.slice(again.lastIndexOf(')')+2).split(' ');if(parts[19]!==item.identity.start||Number(parts[1])!==item.parent)return false;}
+        return await stillOwned(root)&&await stillOwned(identity);
+      }
+      pid=parent;
+    }
+    return false;
+  }catch(error){if(['ENOENT','ESRCH'].includes((error as NodeJS.ErrnoException).code??''))return false;throw error;}
+}
