@@ -67,6 +67,7 @@ suites that consume the built packages the way a user would.
   (error taxonomy, text and URL matching, assertion polling, JSON-value rules)
   are exported there, and there is no `e2e/internal` subpath.
 - `packages/mobile` — the published `@e2e-dev/mobile` package: the
+- `packages/tern` — the published `@e2e-dev/tern` desktop/TUI engine. It adapts Tern's control/TSP surfaces to the public `e2e/engine` contract and keeps Tern-specific observation/input mechanics out of runner core.
   iOS/Android engine on agent-device, built with the same public
   `defineEngine`, contributing the `device` fixture. Like the web engine it
   depends on `e2e` (peer), never the reverse; the engine implementation
