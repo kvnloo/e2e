@@ -74,6 +74,9 @@ suites that consume the built packages the way a user would.
   The `@e2e-dev/mobile/tools` subpath holds the agent-side `open_app`, `swipe`,
   and `alert` tools; focused-field typing uses the engine's keyboard grammar.
   The main entry never loads the AI SDK.
+- `packages/tern` — the published `@e2e-dev/tern` desktop/TUI engine. It
+  adapts Tern's control/TSP surfaces to the public `e2e/engine` contract,
+  keeping Tern-specific observation and input mechanics out of runner core.
 - `packages/kernel` - the published `@e2e-dev/kernel` package: Kernel hosted
   browsers for the web engine. An official integration with a hosted service
   is one package per service, named after it (`@e2e-dev/<service>`), with the

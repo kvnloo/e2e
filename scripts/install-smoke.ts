@@ -1,6 +1,6 @@
 /**
  * A first install, the way a new user meets it: packs the built `e2e`,
- * `@e2e-dev/web`, and `@e2e-dev/mobile`, installs them with a given pnpm
+ * `@e2e-dev/web`, `@e2e-dev/mobile`, and `@e2e-dev/tern`, installs them with a given pnpm
  * into a fresh project outside this repository, installs again from the
  * lockfile, and runs a TypeScript test through the installed CLI.
  *
@@ -28,7 +28,7 @@ if (pnpmVersion === undefined) {
 }
 
 /** The packages a new user installs: the runner and its engines. */
-const PACKAGES = ['e2e', 'web', 'mobile'] as const;
+const PACKAGES = ['e2e', 'web', 'mobile', 'tern'] as const;
 
 const root = mkdtempSync(join(tmpdir(), 'e2e-install-smoke-'));
 const tarballs = join(root, 'tarballs');
@@ -60,7 +60,12 @@ try {
       name: 'install-smoke',
       private: true,
       type: 'module',
-      devDependencies: { e2e: tarball('e2e-0'), '@e2e-dev/web': tarball('e2e-dev-web-'), '@e2e-dev/mobile': tarball('e2e-dev-mobile-') },
+      devDependencies: {
+        e2e: tarball('e2e-0'),
+        '@e2e-dev/web': tarball('e2e-dev-web-'),
+        '@e2e-dev/mobile': tarball('e2e-dev-mobile-'),
+        '@e2e-dev/tern': tarball('e2e-dev-tern-'),
+      },
     }),
   );
   writeFileSync(join(project, 'e2e.config.ts'), "import type { E2EConfig } from 'e2e';\n\nexport default { targets: [{ name: 'local', platform: 'test' }] } satisfies E2EConfig;\n");
