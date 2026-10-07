@@ -124,8 +124,8 @@ We use [changesets](https://github.com/changesets/changesets) to publish new
 versions. It handles bumping the version based on semver, writing the
 changelog, and creating tags and GitHub releases.
 
-If your change affects `e2e`, `@e2e-dev/web`, `@e2e-dev/mobile`, or
-`@e2e-dev/decision`, add a changeset:
+If your change affects `e2e`, `@e2e-dev/web`, `@e2e-dev/mobile`,
+`@e2e-dev/decision`, or `@e2e-dev/tern`, add a changeset:
 
 ```sh
 pnpm changeset
