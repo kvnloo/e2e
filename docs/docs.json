@@ -143,6 +143,7 @@
             "pages": [
               "web",
               "mobile",
+              "tern",
               "api-testing"
             ]
           },
@@ -243,6 +244,10 @@
             "pages": [
               "reference/mobile"
             ]
+          },
+          {
+            "group": "Tern",
+            "pages": ["reference/tern"]
           },
           {
             "group": "Engine contract",
