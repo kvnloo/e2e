@@ -47,8 +47,10 @@ jobs:
           for signal in SIGKILL SIGTERM SIGINT; do E2E_NATIVE_WORKER_SIGNAL="$signal" node apps/tern-testbed/scripts/lifecycle.ts; done
           node apps/tern-testbed/scripts/isolation.ts
           node packages/e2e/dist/cli/bin.js run --config apps/tern-testbed/e2e.sway.config.ts --output apps/tern-testbed/.e2e-parallel --workers 2 --retries 0 --no-cache --reporter list,markdown
+          node apps/tern-testbed/scripts/failures.ts
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:
           name: native-controls
-          path: apps/tern-testbed/.e2e/
+          path: apps/tern-testbed/.e2e*/
+          include-hidden-files: true
