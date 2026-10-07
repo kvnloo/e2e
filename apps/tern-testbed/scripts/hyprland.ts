@@ -72,6 +72,20 @@ try {
   const clickedDeadline=Date.now()+30000;
   for(;;){const ax=await nativeControl(lease,'a11y',signal),tree=await nativeControl(lease,'tree',signal);if(JSON.stringify(ax).includes('Count: 1')&&JSON.stringify(tree).includes('Count: 1'))break;assert(Date.now()<clickedDeadline,'pointer must produce the actual native rendered count');await delay(25,undefined,{signal});}
   const png=Buffer.from(await lease.capture!(signal));assert.equal(png.subarray(0,8).toString('hex'),'89504e470d0a1a0a');assert.equal(png.readUInt32BE(16),1280);assert.equal(png.readUInt32BE(20),900);await writeFile(join(artifacts,'owned-output.png'),png,{mode:0o600});
+  const ownedOutputs=(await ctl(['monitors'],true) as Array<{name:string;activeWorkspace:{name:string}}>).filter(m=>!options.protectedOutputs.includes(m.name));assert.equal(ownedOutputs.length,1);
+  const foreignRoot=join(directory,'foreign');await mkdir(foreignRoot,{mode:0o700});for(const name of ['run','home','config','cache','state'])await mkdir(join(foreignRoot,name),{mode:0o700});
+  const foreignFile=join(foreignRoot,'process.json'),foreignConfig=join(foreignRoot,'sway.conf');
+  await writeFile(foreignConfig,'xwayland disable\noutput WL-1 mode 1280x900 scale 1\n',{mode:0o600});
+  const foreignEnv={PATH:'/usr/bin:/bin',LANG:'C.UTF-8',HOME:join(foreignRoot,'home'),XDG_CONFIG_HOME:join(foreignRoot,'config'),XDG_CACHE_HOME:join(foreignRoot,'cache'),XDG_STATE_HOME:join(foreignRoot,'state'),XDG_RUNTIME_DIR:join(foreignRoot,'run'),WAYLAND_DISPLAY:join(runtime,host.waylandDisplay),WLR_BACKENDS:'wayland',WLR_RENDERER:'pixman',WLR_WL_OUTPUTS:'1',WLR_LIBINPUT_NO_DEVICES:'1'};
+  try{
+    await ctl(['dispatch','exec',`[monitor ${ownedOutputs[0]!.name}; workspace name:${ownedOutputs[0]!.activeWorkspace.name} silent; tag +fixture-foreign; no_initial_focus on; no_focus on] exec /usr/bin/env -i ${[...Object.entries(foreignEnv).map(([k,v])=>`${k}=${v}`),binaries.input,'exec-owned',foreignFile,binaries.sway,'--config',foreignConfig].map(quote).join(' ')}`]);
+    const foreignDeadline=Date.now()+30000;for(;;){const clients=await ctl(['clients'],true) as Array<{tags:string[];mapped:boolean}>;if(clients.some(c=>c.mapped&&c.tags.some(t=>t==='fixture-foreign'||t==='fixture-foreign*')))break;assert(Date.now()<foreignDeadline,'actual foreign client must map');await delay(25,undefined,{signal});}
+    await assert.rejects(lease.guard!(signal));await assert.rejects(provider.release(lease,cleanup()));
+    assert(await stillOwned(identity),'foreign cleanup refusal must not kill the leased native client');assert.deepEqual(await nativeField(human,signal),before);
+  }finally{
+    await exec(binaries.input,['stop',foreignFile],{env:{PATH:'/usr/bin:/bin'},signal:AbortSignal.timeout(30000),timeout:30000});
+    const foreignDeadline=Date.now()+15000;while((await ctl(['clients'],true) as Array<{tags:string[]}>).some(c=>c.tags.some(t=>t==='fixture-foreign'||t==='fixture-foreign*'))){assert(Date.now()<foreignDeadline,'exact fixture foreign process must disappear');await delay(25,undefined,{signal});}
+  }
   for(const workerSignal of ['SIGKILL','SIGTERM','SIGINT'] as const){
     const workerRequest={...request,runId:randomUUID(),attemptId:workerSignal,signal:undefined};
     const payload=join(directory,`worker-${workerSignal}.json`);await writeFile(payload,JSON.stringify({options,request:workerRequest}),{mode:0o600});
@@ -86,6 +100,8 @@ try {
     }finally{if(worker.exitCode===null&&worker.signalCode===null){const exited=once(worker,'exit');worker.kill('SIGKILL');await exited;}await hyprland(options).sweep!({...request,runId:workerRequest.runId},cleanup());}
   }
   assert.deepEqual(await nativeField(human,signal),before);assert.deepEqual(await processIdentity(identity.pid),identity);
+  const endedClient=join(directory,'ended-client.json');await writeFile(endedClient,JSON.stringify(identity),{mode:0o600});
+  await exec(binaries.input,['stop',endedClient],{env:{PATH:'/usr/bin:/bin'},signal:AbortSignal.timeout(30000),timeout:30000});await assert.rejects(lease.guard!(signal),'actual exited native generation must refuse inspection');
   await provider.release(lease,cleanup());lease=undefined;await provider.sweep!(request,cleanup());assert.equal(await stillOwned(identity),false);
   const fixtureOptions=join(directory,'cli-options.json');await writeFile(fixtureOptions,JSON.stringify(options),{mode:0o600});
   const cli=await exec(process.execPath,[join(repo,'packages/e2e/dist/cli/bin.js'),'run','--config',join(repo,'apps/tern-testbed/e2e.hyprland.config.ts'),'--output',join(artifacts,'cli'),'--workers','2','--retries','0','--no-cache','--reporter','list,markdown'],{cwd:repo,env:{PATH:'/usr/bin:/bin',LANG:'C.UTF-8',E2E_TELEMETRY_DISABLED:'1',E2E_HYPRLAND_FIXTURE_OPTIONS:fixtureOptions},signal,timeout:90000,maxBuffer:16*1024*1024});
@@ -94,4 +110,7 @@ try {
   await nativeControl(human,'type "!"',signal);await waitField(human,'human-sentine!l',signal);
   const after=await ctl(['monitors'],true) as Array<{name:string}>;assert.deepEqual(after.map(m=>m.name).sort(),protectedMonitors.map(m=>m.name).sort());
   console.log('Real sandboxed Hyprland boundary: independent native value/caret/focus, chord, pointer, PNG and owned cleanup');
-} finally {if(lease&&provider)await provider.release(lease,cleanup());if(provider)await provider.sweep!(request,cleanup());await outer.release(cleanup());await rm(directory,{recursive:true});}
+} finally {
+  try {if(lease&&provider)await provider.release(lease,cleanup());if(provider)await provider.sweep!(request,cleanup());}
+  finally {await outer.release(cleanup());await rm(directory,{recursive:true});}
+}

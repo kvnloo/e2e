@@ -49,3 +49,4 @@ jobs:
         with:
           name: native-containment
           path: apps/tern-testbed/.e2e-hyprland/
+          include-hidden-files: true
