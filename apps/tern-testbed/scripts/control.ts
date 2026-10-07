@@ -17,7 +17,7 @@ export async function nativeControl(lease:TernLease,scenario:string,signal:Abort
 }
 export async function nativeField(lease:TernLease,signal:AbortSignal):Promise<{value:string;focused:boolean;selector:string}> {
   const ax=await nativeControl(lease,'a11y',signal) as unknown as Ax;
-  const candidates=flatten([ax]).filter(n=>/^(TextInput|TextBox|Editor|textbox)$/i.test(n.role??'')&&(n.name==='Value'||n.placeholder==='Value'));
+  const candidates=flatten([ax]).filter(n=>/^(TextInput|MultilineTextInput|TextField|TextBox|Editor|textbox)$/i.test(n.role??'')&&(n.name==='Value'||n.placeholder==='Value'));
   assert.equal(candidates.length,1,'one real inert native Value control');const node=candidates[0]!;
   const tree=await nativeControl(lease,'tree',signal);const matches=flatten(tree.tree as Dom[]).filter(n=>n.input&&box(n.rect,node.bounds));assert.equal(matches.length,1);
   const dumped=await nativeControl(lease,'dump *',signal);const addresses=(dumped.elements as Dump[]).filter(n=>n.visible&&box(n.rect,node.bounds));const deepest=addresses.filter(n=>!addresses.some(o=>o!==n&&o.path.startsWith(`${n.path}>`)));assert.equal(deepest.length,1);
