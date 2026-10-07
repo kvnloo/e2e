@@ -125,22 +125,25 @@ A headless output can be exposed through `wayvnc` without making it the
 human's active output. Bind `wayvnc` to loopback and select the test output:
 
 ```bash
-wayvnc --output "$output" 127.0.0.1 "$port"
+wayvnc --disable-input --output "$output" 127.0.0.1 "$port"
 ```
 
 Keep the viewer separate from the test harness. The harness writes a tiny
 connection file such as `.e2e/virtual-display.env` containing the loopback
-endpoint; a user-owned keybind opens their preferred VNC client against that
-endpoint. The agent must never press that keybind itself.
+endpoint. A user-owned wrapper (for example,
+`~/.local/bin/e2e-view-virtual-display`) reads that file and opens the user's
+preferred VNC client. The agent must never invoke the wrapper or press its
+keybind. `--disable-input` keeps this viewer observational: input stays with
+the isolated test environment.
 
 Example host bindings:
 
 ```text
-# Hyprland: show the user's viewer command on demand.
-bind = SUPER SHIFT, E, exec, sh -lc '$E2E_VIRTUAL_DISPLAY_VIEWER'
+# Hyprland
+bind = SUPER SHIFT, E, exec, ~/.local/bin/e2e-view-virtual-display
 
-# Sway:
-bindsym $mod+Shift+e exec sh -lc '$E2E_VIRTUAL_DISPLAY_VIEWER'
+# Sway
+bindsym $mod+Shift+e exec ~/.local/bin/e2e-view-virtual-display
 ```
 
 This keeps continuous tests invisible while making the current virtual display
