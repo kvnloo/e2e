@@ -1,0 +1,43 @@
+---
+title: Tern
+description: Test terminal and TUI surfaces through Tern's structured control plane.
+icon: "terminal"
+---
+
+`ternEngine()` from `@e2e-dev/tern` connects e2e to a Tern pane through the
+same public engine contract used by web and mobile.
+
+It prefers Tern's structured control surface—accessibility nodes, element
+geometry, pane state, and native input—so locators and agent actions operate on
+current UI evidence instead of an opaque screenshot.
+
+## Setup
+
+```bash
+pnpm add -D @e2e-dev/tern
+```
+
+```ts title="e2e.config.ts"
+import type { E2EConfig } from 'e2e';
+import { ternEngine } from '@e2e-dev/tern';
+
+export default {
+  targets: [{
+    name: 'tui',
+    engine: ternEngine({ pane: process.env.TERN_PANE, control: process.env.TERN_CONTROL }),
+    app: {},
+  }],
+} satisfies E2EConfig;
+```
+
+`control` defaults to `TERN_CONTROL` and then Tern's default control socket.
+Without `pane`, the engine creates a fresh Tern tab for each attempt using
+`command` and closes it during teardown.
+
+With a reachable control socket it reads `state`, `a11y`, and `tree` and
+maps them into e2e semantic nodes. If that surface is unavailable it falls back
+to surface/scrollback capture; an optional TSP record can preserve tool-card
+heads in that fallback.
+
+Input stays on e2e's standard action vocabulary. No Tern-specific verbs are
+added to runner core.
