@@ -5,10 +5,11 @@ import {
   type EngineHandle, type EngineInitInfo, type EngineCleanupContext, type OperationContext, type NodeRef, type LocatorAction, type SemanticNode,
 } from 'e2e/engine';
 import { control, capture } from './control.ts';
-import { actionSelector, flatten, semanticTree, type NativeAx, type NativeDump, type NativeElement } from './tree.ts';
+import { actionSelector, flatten, focusedEditable, semanticTree, type NativeAx, type NativeDump, type NativeElement } from './tree.ts';
 import type { TernLease, TernProvider, TernRequest } from './provider.ts';
 import { toolCards } from './tsp.ts';
 export { toolCards, type TernToolCard } from './tsp.ts';
+import { withinOperation } from './operation.ts';
 export { attachedTern } from './provider.ts';
 export type { TernInput, TernLease, TernProvider, TernRequest } from './provider.ts';
 
@@ -67,15 +68,16 @@ export function ternEngine({ provider }: TernOptions): EngineHandle {
     const dump = dumped.elements as NativeDump[];
     return { root: semanticTree(ax, tree.tree as NativeElement[], dump, viewport), viewport, truncated: false, dump };
   };
-  const target = async (id: string, context: OperationContext) => {
+  const target = async (id: string, context: OperationContext, scroll = false) => {
     const fresh = await snapshot(context);
     const node = flatten([fresh.root]).find(item => item.ref.id === id);
     if (!node) throw new EngineError('NODE_STALE', 'Native Tern control was replaced', { retryable: true });
-    return { node, selector: actionSelector(node, fresh.dump) };
+    return { node, selector: actionSelector(node, fresh.dump, scroll) };
   };
   const sendKey = async (key: string, context: OperationContext): Promise<void> => {
     const current = requireLease();
     await snapshot(context);
+    void context.timeoutMs;
     if (current.input) {
       try { await current.input.press(key, context.signal); }
       catch { throw new EngineError('ACTION_MAY_HAVE_COMMITTED', 'Compositor key delivery is uncertain', { retryable: false }); }
@@ -86,16 +88,18 @@ export function ternEngine({ provider }: TernOptions): EngineHandle {
     const name = parsed.key.kind === 'named' ? parsed.key.name : parsed.key.char;
     await control(current, `key ${JSON.stringify(name)}`, context, true);
   };
-  const editable = async (context: OperationContext) => {
+  const editable = async (context: OperationContext, intendedId?: string) => {
     const fresh = await snapshot(context);
-    const node = flatten([fresh.root]).find(item => item.states?.focused && ['textbox', 'searchbox'].includes(item.role ?? ''));
-    if (!node) throw new EngineError('NOT_ACTIONABLE', 'No editable native control has focus', { retryable: false });
+    const node=focusedEditable(fresh.root,intendedId);
     return { node, selector: actionSelector(node, fresh.dump) };
   };
-  const type = async (text: string, replace: boolean, context: OperationContext): Promise<void> => {
+  const type = async (text: string, replace: boolean, context: OperationContext, intendedId?: string): Promise<void> => {
     const current = requireLease();
-    const field = await editable(context);
+    const field = await editable(context,intendedId);
     if (replace) await control(current, `a11y set-value ${JSON.stringify(field.selector)} ""`, context, true);
+    await editable(context,intendedId??field.node.ref.id);
+    context.signal.throwIfAborted();
+    void context.timeoutMs;
     if (current.input) {
       try { await current.input.type(text, context.signal); }
       catch { throw new EngineError('ACTION_MAY_HAVE_COMMITTED', 'Compositor text delivery is uncertain', { retryable: false }); }
@@ -119,14 +123,15 @@ export function ternEngine({ provider }: TernOptions): EngineHandle {
       lease = await provider.acquire(request);
       if (lease.mode !== provider.mode) throw new EngineError('ENGINE_FAILURE', 'Tern provider changed its declared transport', { retryable: false });
     },
-    async observe(context) {
-      const fresh = await snapshot(context);
+    async observe(context) { return withinOperation(context,async bounded=>{
+      const fresh = await snapshot(bounded);
       return { location: `tern:${requireLease().id}`, root: fresh.root, viewport: fresh.viewport, truncated: fresh.truncated };
-    },
-    async locate(expression, context) { return resolveExpression(expression, [ (await snapshot(context)).root ]); },
+    }); },
+    async locate(expression, context) { return withinOperation(context,async bounded=>resolveExpression(expression,[ (await snapshot(bounded)).root ])); },
     ...(native ? {
       actions: ['tap', 'doubleTap', 'secondaryTap', 'focus', 'fill', 'clear', 'press', 'swipe', 'scrollIntoView'] as const,
-      async perform(ref: NodeRef, action: LocatorAction, context: OperationContext) {
+      async perform(ref: NodeRef, action: LocatorAction, operationContext: OperationContext) {
+        return withinOperation(operationContext,async context=>{
         const current = requireLease();
         if (action.kind === 'press') {
           if (ref.id !== 'root') {
@@ -146,7 +151,7 @@ export function ternEngine({ provider }: TernOptions): EngineHandle {
           await control(current, `wheel ${horizontal ? delta : 0} ${horizontal ? 0 : delta} lines`, context, true);
           return;
         }
-        const hit = await target(ref.id, context);
+        const hit = await target(ref.id, context, action.kind==='scrollIntoView');
         const selector = JSON.stringify(hit.selector);
         switch (action.kind) {
           case 'tap':
@@ -163,21 +168,24 @@ export function ternEngine({ provider }: TernOptions): EngineHandle {
           case 'clear': await control(current, `a11y set-value ${selector} ""`, context, true); break;
           case 'fill':
             await control(current, `a11y focus ${selector}`, context, true);
-            await type(action.value, true, context);
+            await type(action.value, true, context,ref.id);
             break;
           default: throw new EngineError('UNSUPPORTED_CAPABILITY', 'Native Tern does not support this action', { retryable: false });
         }
+        });
       },
       keyboard: {
-        async type(text: string, options: { readonly replace: boolean }, context: OperationContext) { await type(text, options.replace, context); },
-        async press(key: string, context: OperationContext) { await sendKey(key, context); },
+        async type(text: string, options: { readonly replace: boolean }, context: OperationContext) { await withinOperation(context,bounded=>type(text, options.replace, bounded)); },
+        async press(key: string, context: OperationContext) { await withinOperation(context,bounded=>sendKey(key, bounded)); },
       },
     } : {}),
     ...(native && !provider.borrowed ? { session: {
       async restart(context: OperationContext) {
         if (!request) throw new EngineError('INVALID_STATE', 'Tern has no app to restart', { retryable: false });
-        await end(context);
-        lease = await provider.acquire({ ...request, signal: context.signal });
+        return withinOperation(context,async bounded=>{
+        await end(bounded);
+        lease = await provider.acquire({ ...request, signal: bounded.signal });
+        });
       },
     } } : {}),
     endAttempt: end, dispose: end,

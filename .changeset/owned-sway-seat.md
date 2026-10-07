@@ -8,3 +8,5 @@ Add rootless display leases, persistent named-seat keyboard and pointer input, e
 Native observations are guarded by the leased client generation, and concurrent real-lease fixtures assert independent values, focus, caret and cleanup. The source injector streams UTF-8 without a whole-message allocation and normalizes chord key spelling without adding an unintended Shift modifier.
 
 Required native fixtures also cover deliberately failed/retried bodies, an actual attempt deadline, early abort, partial launch failure and worker SIGKILL/SIGTERM/SIGINT recovery, with exact recorded native-generation and socket cleanup.
+
+Keep cleanup journals host-private across sandbox boundaries, serialize supervisor publication/fork against durable closing, recover interrupted pre-journal allocation, and revalidate descendant PID/start/parent after pidfd acquisition. Cancel buffered injection when its client disconnects and reject post-guard cancellation before dispatch. Require structured intended failure/deadline outcomes and decode nested/styled recorded tool heads.

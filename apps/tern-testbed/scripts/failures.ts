@@ -8,14 +8,15 @@ import { randomUUID } from 'node:crypto';
 import { sway } from '@e2e-dev/sway';
 import type { TernRequest } from '@e2e-dev/tern';
 import { nativeOptions } from '../native-options.ts';
+import { requireExpectedNativeFailures } from './failure-report.ts';
 const exec=promisify(execFile),root=await mkdtemp('/tmp/ef-'),artifactRoot=resolve('apps/tern-testbed/.e2e-failures');
 await mkdir(artifactRoot,{recursive:true,mode:0o700});const output=await mkdtemp(join(artifactRoot,'run-'));
 const env={PATH:process.env.PATH,LANG:'C.UTF-8',E2E_TELEMETRY_DISABLED:'1',E2E_NATIVE_FAILURE_ROOT:root,...Object.fromEntries(Object.entries(process.env).filter(([name])=>/^E2E_(SWAY|SWAYMSG|GRIM|TERN|INPUT)_BINARY$/.test(name)))};
 async function records(path:string):Promise<Array<{client:{pid:number;start:string}}>> {const result:Array<{client:{pid:number;start:string}}>=[];for(const entry of await readdir(path,{withFileTypes:true})){const item=join(path,entry.name);if(entry.isDirectory())result.push(...await records(item));else if(entry.name==='native-client.json')result.push(JSON.parse(await readFile(item,'utf8')) as {client:{pid:number;start:string}});}return result;}
 try{
   let failed=false;
-  try{await exec(process.execPath,[resolve('packages/e2e/dist/cli/bin.js'),'run','--config',resolve('apps/tern-testbed/e2e.failures.config.ts'),'--output',output,'--workers','1','--no-cache','--reporter','list,markdown'],{env,timeout:180000,maxBuffer:16*1024*1024});}
-  catch(error){const failure=error as {code?:number;stdout?:string;stderr?:string};assert.equal(failure.code,1,'only the runner expected failed-test exit is accepted');await writeFile(join(output,'expected-failure.txt'),`${failure.stdout??''}\n${failure.stderr??''}`,{mode:0o600});failed=true;}
+  try{await exec(process.execPath,[resolve('packages/e2e/dist/cli/bin.js'),'run','--config',resolve('apps/tern-testbed/e2e.failures.config.ts'),'--output',output,'--workers','1','--no-cache','--reporter','json'],{env,timeout:180000,maxBuffer:16*1024*1024});}
+  catch(error){const failure=error as {code?:number;stdout?:string;stderr?:string};assert.equal(failure.code,1,'only the runner expected failed-test exit is accepted');requireExpectedNativeFailures(JSON.parse(failure.stdout??''));await writeFile(join(output,'expected-failure.json'),failure.stdout!,{mode:0o600});failed=true;}
   assert(failed);const clients=await records(output);assert.equal(clients.length,3,'two actual retry clients and the actual deadline client must be recorded');
   for(const {client}of clients){try{const stat=await readFile(`/proc/${client.pid}/stat`,'utf8');assert.notEqual(stat.slice(stat.lastIndexOf(')')+2).split(' ')[19],client.start,'no recorded native generation may survive');}catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;}}
   assert.deepEqual(await readdir(root),[],'failed/retried/deadline run ownership is swept');

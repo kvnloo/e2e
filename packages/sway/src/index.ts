@@ -3,13 +3,13 @@ import { spawn, execFile, type ChildProcess } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createConnection } from 'node:net';
 import { mkdir, mkdtemp, writeFile, readFile, readdir, rename, lstat, rm, rmdir } from 'node:fs/promises';
-import { dirname, join, resolve, isAbsolute } from 'node:path';
+import { basename, dirname, join, resolve, isAbsolute } from 'node:path';
 import { tmpdir } from 'node:os';
 import { setTimeout as delay } from 'node:timers/promises';
 import { ConfigurationError, EngineError, parseKey, type EngineCleanupContext } from 'e2e/engine';
 import type { TernLease, TernProvider, TernRequest } from '@e2e-dev/tern';
 import { processIdentity, stillOwned, ownedDirectory, childPids, type ProcessIdentity } from './ownership.ts';
-export { processIdentity, stillOwned, ownedDirectory, type ProcessIdentity } from './ownership.ts';
+export { processIdentity, stillOwned, ownedDirectory, ownedDescendant, type ProcessIdentity } from './ownership.ts';
 const exec = promisify(execFile);
 
 export interface OwnedWaylandParent {
@@ -24,6 +24,8 @@ export interface SwayOptions {
   readonly size?: { readonly width: number; readonly height: number };
   readonly env?: Readonly<Record<string, string>>;
   readonly root?: string;
+  /** Host-private cleanup authority; never bind this directory or an ancestor into a guest. */
+  readonly journalRoot?: string;
   readonly parent?: OwnedWaylandParent;
   /** GLES is only for an explicitly selected, already-readable render node. */
   readonly renderer?: 'pixman' | 'gles2';
@@ -45,12 +47,15 @@ export interface SwayDisplay {
   capture(signal: AbortSignal): Promise<Buffer>;
   release(context: EngineCleanupContext): Promise<void>;
 }
-interface LeaseRecord { version: 1; runId: string; targetName: string; directory: string; processes: ProcessIdentity[] }
+interface LeaseRecord { version: 1; runId: string; targetName: string; directory: string; journalDirectory: string; processes: ProcessIdentity[] }
 interface Container { id: number; pid?: number | null; rect: { x: number; y: number; width: number; height: number }; nodes?: Container[]; floating_nodes?: Container[] }
 interface Seat { name: string; focus: number }
 const keyNames: Readonly<Record<string, string>> = { Enter: 'Return', Escape: 'Escape', Tab: 'Tab', Backspace: 'BackSpace', Delete: 'Delete', Insert: 'Insert', Space: 'space', ArrowUp: 'Up', ArrowDown: 'Down', ArrowLeft: 'Left', ArrowRight: 'Right', Home: 'Home', End: 'End', PageUp: 'Prior', PageDown: 'Next', F1: 'F1', F2: 'F2', F3: 'F3', F4: 'F4', F5: 'F5', F6: 'F6', F7: 'F7', F8: 'F8', F9: 'F9', F10: 'F10', F11: 'F11', F12: 'F12' };
 const modifiers: Readonly<Record<string, number>> = { Shift: 1, Control: 2, ControlOrMeta: 2, Alt: 4, Meta: 8 };
 const runDirectory = (options: SwayOptions, runId: string, targetName: string): string => join(options.root ?? join(tmpdir(), `e2e-sway-${process.getuid?.()}`), createHash('sha256').update(runId).update('\0').update(targetName).digest('hex').slice(0, 24));
+const journalRunDirectory=(options:SwayOptions,runId:string,target:string)=>runDirectory({...options,root:options.journalRoot??options.root},runId,target);
+async function closePublication(directory:string,binary:string,context:EngineCleanupContext):Promise<void>{await exec(binary,['close',join(directory,'lease.json')],{env:{PATH:'/usr/bin:/bin'},signal:context.signal,timeout:Math.max(1,context.timeoutMs)});}
+async function removeRuntime(directory:string):Promise<void>{try{await ownedDirectory(directory);await rm(directory,{recursive:true});}catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;}}
 
 async function stop(identity: ProcessIdentity, context: Pick<EngineCleanupContext, 'signal' | 'timeoutMs'>, binary: string): Promise<void> {
   if (!await stillOwned(identity)) return;
@@ -82,8 +87,15 @@ export async function swayDisplay(options: SwayOptions, request: TernRequest): P
   await ownedDirectory(dirname(root));
   await mkdir(root, { recursive: true, mode: 0o700 });
   await ownedDirectory(root);
-  const directory = await mkdtemp(join(root, 'attempt-'));
-  for (const name of ['run', 'home', 'config', 'cache', 'state']) await mkdir(join(directory, name), { mode: 0o700 });
+  const journalRoot=journalRunDirectory(options,request.runId,request.targetName);
+  await mkdir(journalRoot,{recursive:true,mode:0o700});await ownedDirectory(journalRoot);
+  const journalDirectory=await mkdtemp(join(journalRoot,'attempt-'));
+  const directory=journalRoot===root?journalDirectory:join(root,basename(journalDirectory));
+  const record: LeaseRecord = { version: 1, runId: request.runId, targetName: request.targetName, directory, journalDirectory, processes: [] };
+  const save = async () => {await writeFile(join(journalDirectory,'lease.next'),JSON.stringify(record),{mode:0o600});await rename(join(journalDirectory,'lease.next'),join(journalDirectory,'lease.json'));};
+  await save();
+  try{if(directory!==journalDirectory)await mkdir(directory,{mode:0o700});for (const name of ['run', 'home', 'config', 'cache', 'state']) await mkdir(join(directory, name), { mode: 0o700 });}
+  catch(error){await removeRuntime(directory);if(directory!==journalDirectory)await rm(journalDirectory,{recursive:true});throw error;}
   const seat = `agent-${createHash('sha256').update(directory).digest('hex').slice(0, 12)}`;
   const output = options.parent ? 'WL-1' : 'HEADLESS-1';
   const env: Record<string, string> = { PATH: request.env.PATH ?? '/usr/bin:/bin', LANG: 'C.UTF-8', ...options.env,
@@ -92,17 +104,12 @@ export async function swayDisplay(options: SwayOptions, request: TernRequest): P
     TERN_CONFIG_DIR: join(directory, 'config', 'tern'), SHELL: '/bin/bash' };
   if (options.renderDevice) env.WLR_RENDER_DRM_DEVICE = options.renderDevice;
   const config = join(directory, 'sway.conf');
-  await writeFile(config, `output ${output} mode ${size.width}x${size.height}\noutput ${output} scale 1\ndefault_border none\nxwayland disable\nseat ${seat} fallback true\nseat ${seat} attach "*"\nfocus_follows_mouse yes\n`, { mode: 0o600 });
-  const record: LeaseRecord = { version: 1, runId: request.runId, targetName: request.targetName, directory, processes: [] };
-  const save = async () => {
-    await writeFile(join(directory, 'lease.next'), JSON.stringify(record), { mode: 0o600 });
-    await rename(join(directory, 'lease.next'), join(directory, 'lease.json'));
-  };
-  await save();
+  try{await writeFile(config, `output ${output} mode ${size.width}x${size.height}\noutput ${output} scale 1\ndefault_border none\nxwayland disable\nseat ${seat} fallback true\nseat ${seat} attach "*"\nfocus_follows_mouse yes\n`, { mode: 0o600 });}
+  catch(error){await removeRuntime(directory);if(directory!==journalDirectory)await rm(journalDirectory,{recursive:true});throw error;}
   const children: ChildProcess[] = [];
   const launch = async (binary: string, args: readonly string[], signal: AbortSignal): Promise<ProcessIdentity> => {
     signal.throwIfAborted();
-    const identityFile = join(directory, `process-${randomUUID()}.json`);
+    const identityFile = join(journalDirectory, `process-${randomUUID()}.json`);
     const child = spawn(options.binaries.input, ['supervise', identityFile, binary, ...args], { env, detached: true, stdio: 'ignore' });
     children.push(child);
     const identity = await new Promise<ProcessIdentity>((accept, reject) => {
@@ -116,15 +123,17 @@ export async function swayDisplay(options: SwayOptions, request: TernRequest): P
   let released = false;
   const release = async (context: EngineCleanupContext): Promise<void> => {
     if (released) return;
-    for (const identity of (await recordedProcesses(directory, record.processes)).reverse()) await stop(identity, context, options.binaries.input);
+    await closePublication(journalDirectory,options.binaries.input,context);
+    if(directory!==journalDirectory){try{await ownedDirectory(directory);await closePublication(directory,options.binaries.input,context);}catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;}}
+    for (const identity of (await recordedProcesses(journalDirectory, record.processes)).toReversed()) await stop(identity, context, options.binaries.input);
     for (const child of children) child.unref();
-    await rm(directory, { recursive: true, force: true });
+    await removeRuntime(directory);if(directory!==journalDirectory)await rm(journalDirectory,{recursive:true,force:true});
     released = true;
   };
   try {
     if (options.parent) {
       const parentEnv = { ...env, WAYLAND_DISPLAY: join(options.parent.runtimeDir, options.parent.waylandDisplay) };
-      const identityFile = join(directory, `process-${randomUUID()}.json`);
+      const identityFile = join(directory, `launch-${randomUUID()}.json`);
       const identity = await options.parent.launch(options.binaries.input, ['supervise', identityFile, options.binaries.sway, '--config', config], parentEnv, identityFile, request.signal);
       record.processes.push(identity); await save();
     } else await launch(options.binaries.sway, ['--config', config], request.signal);
@@ -162,33 +171,27 @@ export async function swayDisplay(options: SwayOptions, request: TernRequest): P
       await delay(20, undefined, { signal: request.signal });
     }
     const input = async (header: string, payload: string, signal: AbortSignal): Promise<void> => {
-      signal.throwIfAborted();
-      const after = await options.parent?.guard?.(signal);
-      try {
-      await new Promise<void>((accept, reject) => {
-        const socket = createConnection({ path: inputSocket });
-        const abort = () => socket.destroy(new Error('Native input cancelled'));
+      signal.throwIfAborted();const after=await options.parent?.guard?.(signal);signal.throwIfAborted();
+      try{await new Promise<void>((accept, reject) => {
+        const connection = createConnection({ path: inputSocket });
+        const abort = () => connection.destroy(new Error('Native input cancelled'));
         let settled = false;
         const finish = (error?: Error) => {
-          if (settled) return;
-          settled = true;
-          signal.removeEventListener('abort', abort); socket.destroy();
+          if (settled) return;settled = true;
+          signal.removeEventListener('abort', abort); connection.destroy();
           if (error) reject(error); else accept();
         };
-        signal.addEventListener('abort', abort, { once: true });
-        socket.setTimeout(10000, () => socket.destroy(new Error('Native input timed out')));
+        signal.addEventListener('abort', abort, { once: true });if(signal.aborted){finish(new EngineError('ACTION_MAY_HAVE_COMMITTED','Native input cancelled',{retryable:false}));return;}
+        connection.setTimeout(10000, () => connection.destroy(new Error('Native input timed out')));
         let reply = '';
-        socket.once('connect', () => { socket.write(header); if (payload) socket.write(payload); });
-        socket.on('data', data => {
+        connection.once('connect', () => { if(signal.aborted){abort();return;}connection.write(header); if (payload) connection.write(payload); });
+        connection.on('data', data => {
           reply += data.toString();
-          if (reply.includes('\n')) {
-            finish(reply === 'OK\n' ? undefined : new EngineError('ACTION_MAY_HAVE_COMMITTED', 'Persistent input was not acknowledged', { retryable: false }));
-          }
+          if (reply.includes('\n')) finish(reply === 'OK\n' ? undefined : new EngineError('ACTION_MAY_HAVE_COMMITTED', 'Persistent input was not acknowledged', { retryable: false }));
         });
-        socket.once('error', () => finish(new EngineError('ACTION_MAY_HAVE_COMMITTED', 'Persistent input transport failed', { retryable: false })));
-        socket.once('end', () => finish(new EngineError('ACTION_MAY_HAVE_COMMITTED', 'Persistent input disconnected before acknowledgment', { retryable: false })));
-      });
-      } finally { await after?.(); }
+        connection.once('error', () => finish(new EngineError('ACTION_MAY_HAVE_COMMITTED', 'Persistent input transport failed', { retryable: false })));
+        connection.once('close', () => { if (!settled) finish(new EngineError('ACTION_MAY_HAVE_COMMITTED', 'Persistent input ended without acknowledgment', { retryable: false })); });
+      });}finally{await after?.();}
     };
     let client: Container | undefined;
     let clientIdentity: ProcessIdentity | undefined;
@@ -201,7 +204,7 @@ export async function swayDisplay(options: SwayOptions, request: TernRequest): P
     };
     const pointer = async (x: number, y: number, button: boolean, signal: AbortSignal): Promise<void> => {
       if (![x, y].every(Number.isFinite) || x < 0 || y < 0 || x >= size.width || y >= size.height) throw new EngineError('NOT_ACTIONABLE', 'Pointer is outside the isolated output', { retryable: false });
-      await input(`P ${Math.round(x)} ${Math.round(y)} ${size.width} ${size.height} ${button ? 1 : 0}\n`, '', signal);
+      await input(`P ${Math.floor(x)} ${Math.floor(y)} ${size.width} ${size.height} ${button ? 1 : 0}\n`, '', signal);
     };
     return { id: directory, directory, seat, output, env, spawn: launch, release, pointer,
       get nativeClient() { return clientIdentity; },
@@ -291,19 +294,26 @@ export function sway(options: SwayOptions): TernProvider {
     },
     async release(lease, context) { const display = displays.get(lease.id); if (!display) return; await display.release(context); displays.delete(lease.id); },
     async sweep(request, context) {
-      const root = runDirectory(options, request.runId, request.targetName);
+      const root = journalRunDirectory(options, request.runId, request.targetName);
       let entries: string[];
       try { await ownedDirectory(root); entries = await readdir(root); }
       catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return; throw error; }
       for (const name of entries) {
         if (!name.startsWith('attempt-')) continue;
-        const directory = join(root, name); await ownedDirectory(directory);
-        const record = JSON.parse(await readFile(join(directory, 'lease.json'), 'utf8')) as LeaseRecord;
-        if (record.version !== 1 || record.runId !== request.runId || record.targetName !== request.targetName || record.directory !== directory) throw new EngineError('INVALID_STATE', 'Refusing unowned native cleanup record', { retryable: false });
-        for (const identity of (await recordedProcesses(directory, record.processes)).reverse()) await stop(identity, context, options.binaries.input);
-        await rm(directory, { recursive: true });
+        const journalDirectory = join(root, name); await ownedDirectory(journalDirectory);
+        await closePublication(journalDirectory,options.binaries.input,context);
+        let record:LeaseRecord;
+        try{record=JSON.parse(await readFile(join(journalDirectory,'lease.json'),'utf8')) as LeaseRecord;}
+        catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;await rm(journalDirectory,{recursive:true});continue;}
+        const runtimeDirectory=join(runDirectory(options,request.runId,request.targetName),name);
+        if (record.version !== 1 || record.runId !== request.runId || record.targetName !== request.targetName || record.journalDirectory !== journalDirectory||record.directory!==runtimeDirectory) throw new EngineError('INVALID_STATE', 'Refusing unowned native cleanup record', { retryable: false });
+        if(record.directory!==journalDirectory){try{await ownedDirectory(record.directory);await closePublication(record.directory,options.binaries.input,context);}catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;}}
+        for (const identity of (await recordedProcesses(journalDirectory, record.processes)).toReversed()) await stop(identity, context, options.binaries.input);
+        await removeRuntime(record.directory);if(record.directory!==journalDirectory)await rm(journalDirectory,{recursive:true});
       }
       await rmdir(root);
+      const runtimeRoot=runDirectory(options,request.runId,request.targetName);
+      if(runtimeRoot!==root){try{await ownedDirectory(runtimeRoot);await rmdir(runtimeRoot);}catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;}}
     },
   };
 }
