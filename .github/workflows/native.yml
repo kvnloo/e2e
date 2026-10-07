@@ -58,7 +58,7 @@ jobs:
           for i in $(seq 1 100); do test ! -S "$E2E_TERN_CONTROL" || break; kill -0 "$tern_pid"; sleep .1; done
           test -S "$E2E_TERN_CONTROL"
           "$E2E_TERN_BINARY" ctl --control "$E2E_TERN_CONTROL" ready
-          "$E2E_TERN_BINARY" ctl --control "$E2E_TERN_CONTROL" "run \"node $GITHUB_WORKSPACE/apps/tern-testbed/src/controls.mjs &\""
+          "$E2E_TERN_BINARY" ctl --control "$E2E_TERN_CONTROL" "run \"node $GITHUB_WORKSPACE/apps/tern-testbed/src/controls.mjs\""
           export E2E_TERN_PANE=$("$E2E_TERN_BINARY" ctl --control "$E2E_TERN_CONTROL" state | node -e 'let s="";process.stdin.on("data",d=>s+=d);process.stdin.on("end",()=>{const v=JSON.parse(s);if(!v.ok||v.panes.length!==1)process.exit(1);console.log(v.focused.id)})')
           node packages/e2e/dist/cli/bin.js run --config apps/tern-testbed/e2e.config.ts --output apps/tern-testbed/.e2e --workers 1 --retries 0 --no-cache --reporter list,markdown
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
