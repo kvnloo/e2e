@@ -62,7 +62,7 @@ export function semanticTree(ax: NativeAx, elements: readonly NativeElement[], d
     const inputs = valid ? dom.filter(item => item.input && item.rect && sameBox(item.rect, bounds)) : [];
     if(inputs.length>1) throw new EngineError('ENGINE_FAILURE','Native input metadata is ambiguous',{retryable:false});
     const element=inputs[0];
-    const password=states.includes('password')||node.role==='PasswordInput'||element?.input?.type==='password';
+    const password=states.includes('password')||/password/i.test(node.role??'')||element?.input?.type==='password';
     const secure=password||states.includes('protected')||element?.input?.secure===true;
     if(!secure&&element?.input?.value!==undefined&&node.value!==undefined&&String(node.value)!==element.input.value) throw new EngineError('ENGINE_FAILURE','Native AX and rendered input values disagree',{retryable:false});
     const value = element?.input?.value ?? node.value;
@@ -71,7 +71,7 @@ export function semanticTree(ax: NativeAx, elements: readonly NativeElement[], d
       || bounds![0]! + bounds![2]! > viewport.width + 1 || bounds![1]! + bounds![3]! > viewport.height + 1
       || !dump.some(item => item.visible && sameBox(item.rect, bounds!));
     return [{
-      ref: { id, revision: '' }, role: roles[node.role ?? ''] ?? 'generic',
+      ref: { id, revision: '' }, role: password ? 'textbox' : roles[node.role ?? ''] ?? 'generic',
       ...(node.name === undefined ? {} : { name: node.name }),
       ...(password ? { inputPurpose: 'password' as const } : {}),
       ...(!secure && value !== undefined ? { value: String(value) } : {}),
