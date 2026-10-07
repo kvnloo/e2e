@@ -2,19 +2,42 @@
   "name": "@e2e-dev/tern",
   "version": "0.0.1",
   "description": "Tern desktop engine for e2e agentic end-to-end testing",
-  "keywords": ["e2e", "end-to-end", "testing", "agentic", "desktop-testing", "terminal", "tui", "tern"],
+  "keywords": [
+    "e2e",
+    "end-to-end",
+    "testing",
+    "agentic",
+    "desktop-testing",
+    "terminal",
+    "tui",
+    "tern"
+  ],
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/tester-army/e2e.git",
     "directory": "packages/tern"
   },
-  "bugs": {"url": "https://github.com/tester-army/e2e/issues"},
+  "bugs": {
+    "url": "https://github.com/tester-army/e2e/issues"
+  },
   "homepage": "https://github.com/tester-army/e2e/tree/main/packages/tern#readme",
-  "publishConfig": {"registry": "https://registry.npmjs.org/", "access": "public", "tag": "latest"},
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org/",
+    "access": "public",
+    "tag": "latest"
+  },
   "type": "module",
-  "exports": {".": {"types": "./dist/index.d.ts", "default": "./dist/index.js"}},
-  "files": ["dist", "NOTICE"],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "NOTICE"
+  ],
   "scripts": {
     "build": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\" && tsc --project tsconfig.build.json && node ../../scripts/stamp-dist.ts",
     "prepublishOnly": "node ../../scripts/check-dist.ts",
@@ -22,12 +45,16 @@
     "test": "vitest run",
     "test:watch": "vitest"
   },
-  "peerDependencies": {"e2e": ">=0.18.0 <1"},
+  "peerDependencies": {
+    "e2e": ">=0.18.0 <1"
+  },
   "devDependencies": {
     "@types/node": "26.6.2",
     "e2e": "workspace:*",
     "typescript": "7.0.2",
     "vitest": "5.0.1"
   },
-  "engines": {"node": "^22.22.3 || >=24.8.0"}
+  "engines": {
+    "node": "^22.22.3 || >=24.8.0"
+  }
 }
