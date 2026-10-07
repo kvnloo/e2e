@@ -47,6 +47,7 @@ docs:
 native:
   - *runner
   - 'packages/tern/**'
+  - 'packages/sway/**'
   - 'apps/tern-testbed/**'
   - '.github/workflows/native.yml'
   - '.github/workflows/spec.yml'

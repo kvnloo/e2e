@@ -17,7 +17,7 @@ export interface NativeElement {
   readonly class?: string;
   readonly text?: string;
   readonly rect?: readonly number[];
-  readonly input?: { readonly value?: string; readonly focused?: boolean };
+  readonly input?: { readonly value?: string; readonly focused?: boolean; readonly type?: string; readonly secure?: boolean };
   readonly children?: readonly NativeElement[];
 }
 export interface NativeDump {
@@ -59,8 +59,11 @@ export function semanticTree(ax: NativeAx, elements: readonly NativeElement[], d
     const bounds = node.bounds;
     const valid = bounds?.length === 4 && bounds.every(Number.isFinite);
     const states = node.states ?? [];
-    const secure = states.includes('protected') || states.includes('password');
     const element = valid ? dom.find(item => item.rect && sameBox(item.rect, bounds)) : undefined;
+    const secure = states.includes('protected') || states.includes('password') || /password/i.test(node.role ?? '') || element?.input?.type === 'password' || element?.input?.secure === true;
+    if (!secure && ['textbox', 'searchbox'].includes(roles[node.role ?? ''] ?? '') && node.value !== undefined && element?.input?.value !== undefined && String(node.value) !== String(element.input.value)) {
+      throw new EngineError('ENGINE_FAILURE', 'Native control and accessibility text values disagree; an edit receipt is not rendered UI proof', { retryable: false });
+    }
     const value = element?.input?.value ?? node.value;
     const hidden = !valid || bounds[2]! <= 0 || bounds[3]! <= 0 || bounds[0]! < 0 || bounds[1]! < 0
       || bounds[0]! + bounds[2]! > viewport.width + 1 || bounds[1]! + bounds[3]! > viewport.height + 1

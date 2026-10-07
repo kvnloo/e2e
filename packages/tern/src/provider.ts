@@ -13,10 +13,11 @@ export interface TernRequest {
   readonly signal: AbortSignal;
 }
 
-/** A compositor-local keyboard, never the operator's globally focused keyboard. */
+/** Compositor-local input, never the operator's globally focused seat. */
 export interface TernInput {
   type(text: string, signal: AbortSignal): Promise<void>;
   press(key: string, signal: AbortSignal): Promise<void>;
+  tap?(x: number, y: number, signal: AbortSignal): Promise<void>;
 }
 
 /** An explicitly addressed native window, or an observation-only terminal pane. */
@@ -28,6 +29,8 @@ export interface TernLease {
   readonly binary: string;
   readonly env: Readonly<Record<string, string>>;
   readonly input?: TernInput;
+  readonly client?: { readonly pid: number; readonly start: string };
+  readonly recordPath?: string;
 }
 
 /** Resources are acquired in startAttempt and released even after partial setup fails. */

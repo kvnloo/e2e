@@ -27,7 +27,11 @@ export async function control(lease: TernLease, scenario: string, context: Pick<
 /** A terminal capture is incomplete text, never a native control tree. */
 export async function capture(lease: TernLease, context: OperationContext): Promise<string> {
   const options = { env: lease.env, signal: context.signal, timeout: Math.max(1, context.timeoutMs), maxBuffer: 8 * 1024 * 1024 };
-  const surface = await exec(lease.binary, ['capture', '--surfaces', lease.pane], options);
-  const scrollback = await exec(lease.binary, ['capture', '--scrollback', lease.pane], options);
-  return `${surface.stdout}\n${scrollback.stdout}`;
+  try {
+    const surface = await exec(lease.binary, ['capture', '--surfaces', lease.pane], options);
+    const scrollback = await exec(lease.binary, ['capture', '--scrollback', lease.pane], options);
+    return `${surface.stdout}\n${scrollback.stdout}`;
+  } catch {
+    throw new EngineError('ENGINE_FAILURE', 'Explicit Tern capture failed', { retryable: false });
+  }
 }

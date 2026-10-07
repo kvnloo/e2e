@@ -1,11 +1,14 @@
 import { createHash } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
 import {
   ConfigurationError, defineEngine, EngineError, parseKey, resolveExpression,
-  type EngineHandle, type EngineInitInfo, type EngineCleanupContext, type OperationContext, type NodeRef, type LocatorAction,
+  type EngineHandle, type EngineInitInfo, type EngineCleanupContext, type OperationContext, type NodeRef, type LocatorAction, type SemanticNode,
 } from 'e2e/engine';
 import { control, capture } from './control.ts';
 import { actionSelector, flatten, semanticTree, type NativeAx, type NativeDump, type NativeElement } from './tree.ts';
 import type { TernLease, TernProvider, TernRequest } from './provider.ts';
+import { toolCards } from './tsp.ts';
+export { toolCards, type TernToolCard } from './tsp.ts';
 export { attachedTern } from './provider.ts';
 export type { TernInput, TernLease, TernProvider, TernRequest } from './provider.ts';
 
@@ -31,12 +34,19 @@ export function ternEngine({ provider }: TernOptions): EngineHandle {
     const current = requireLease();
     if (!native) {
       const counts = new Map<string, number>();
-      const nodes = (await capture(current, context)).split('\n').filter(line => line.trim()).map(line => {
+      const nodes: SemanticNode[] = (await capture(current, context)).split('\n').filter(line => line.trim()).map(line => {
         const hash = createHash('sha256').update(line).digest('hex').slice(0, 20);
         const count = (counts.get(hash) ?? 0) + 1;
         counts.set(hash, count);
         return { ref: { id: `text:${hash}:${count}`, revision: '' }, role: 'text', name: line, text: line };
       });
+      if (current.recordPath) for (const card of toolCards(await readFile(current.recordPath, 'utf8'))) {
+        nodes.push({ ref: { id: `tool:${JSON.stringify([card.surface, card.id])}`, revision: '' }, role: 'group',
+          name: card.name, text: `${card.name} ${card.target}`,
+          attributes: { target: card.target, surface: card.surface, nativeId: card.id, statusAtAdd: card.statusAtAdd, provenance: 'historical-tool-add' },
+          states: { disabled: true },
+        });
+      }
       return { root: { ref: { id: 'root', revision: '' }, role: 'window', children: nodes }, viewport: { width: 80, height: 24 }, truncated: true, dump: [] as NativeDump[] };
     }
     const state = await control(current, 'state', context);
@@ -139,7 +149,13 @@ export function ternEngine({ provider }: TernOptions): EngineHandle {
         const hit = await target(ref.id, context);
         const selector = JSON.stringify(hit.selector);
         switch (action.kind) {
-          case 'tap': await control(current, `click ${selector}`, context, true); break;
+          case 'tap':
+            if (current.input?.tap) {
+              const rect = hit.node.rect!;
+              try { await current.input.tap(rect.x + rect.width / 2, rect.y + rect.height / 2, context.signal); }
+              catch { throw new EngineError('ACTION_MAY_HAVE_COMMITTED', 'Compositor pointer delivery is uncertain', { retryable: false }); }
+            } else await control(current, `click ${selector}`, context, true);
+            break;
           case 'doubleTap': await control(current, `dblclick ${selector}`, context, true); break;
           case 'secondaryTap': await control(current, `click ${selector} right`, context, true); break;
           case 'focus': await control(current, `a11y focus ${selector}`, context, true); break;
@@ -157,7 +173,7 @@ export function ternEngine({ provider }: TernOptions): EngineHandle {
         async press(key: string, context: OperationContext) { await sendKey(key, context); },
       },
     } : {}),
-    ...(!provider.borrowed ? { session: {
+    ...(native && !provider.borrowed ? { session: {
       async restart(context: OperationContext) {
         if (!request) throw new EngineError('INVALID_STATE', 'Tern has no app to restart', { retryable: false });
         await end(context);

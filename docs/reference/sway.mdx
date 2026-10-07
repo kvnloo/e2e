@@ -1,0 +1,12 @@
+---
+title: Sway provider reference
+description: Native resource ownership, persistent input and failure semantics.
+---
+
+`sway(options)` returns a native `TernProvider`; `swayDisplay(options, request)` leases the same display directly. `binaries` requires absolute paths for `sway`, `swaymsg`, `tern`, `grim`, and the explicitly built `input` executable. Optional `size` defaults to 1280 by 900; optional `env` passes only explicitly declared variables into an otherwise curated environment. `root` must be a short private absolute prefix because Unix sockets have bounded paths.
+
+The resource exposes `id`, `directory`, `seat`, `output`, `env`, `spawn`, `focusClient`, `type`, `press`, `pointer`, `capture`, and idempotent `release`. `spawn` is supervised; client focus is internal to the newly owned compositor. Never use it to target an operator window. An `OwnedWaylandParent` is supplied by an explicit containment provider, not inferred from ambient display variables.
+
+Native input persists across operations and advertises both capabilities before Tern connects. Key grammar comes from `e2e/engine.parseKey`; Linux ControlOrMeta means Control. Unsupported or unauthorized input fails closed. Acknowledgment means the compositor consumed the protocol request, not that the app performed the intended action; assert real semantic effects. No application turn, key save or permission grant is part of readiness.
+
+Release closes only recorded process generations and their descendants. Pidfds prevent PID reuse from targeting another process. A failed cleanup remains an error with ownership records retained; no wildcard kill or forced borrowed shutdown occurs. Input and control sockets disappear with their owned directory. Target finish repeats the exact scoped sweep after an interrupted worker. Raw output capture is available only by explicit resource call and contains no secret masking.

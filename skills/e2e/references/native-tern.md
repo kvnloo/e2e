@@ -7,3 +7,9 @@ A capture lease is observation-only, truncated text. It cannot perform native ac
 Default native modifier delivery is refused. Select a provider with a real isolated keyboard for chords. Never discover the operator's control socket, dispatch host keyboard input, move physical focus, or reuse private profile credentials. Screenshot capture has no secret mask and is not advertised by this engine.
 
 `apps/tern-testbed` is a real SDK fixture with inert controls. Its unit tests complement, not replace, the required real native CI job. The SDK is public; native Tern delivery is currently closed beta. A permitted reproducible pinned executable is a prerequisite, not a mockable test detail. No workstation paths, profiles, private binaries or histories belong in a contribution.
+
+## Owned Linux input
+
+Use `@e2e-dev/sway.sway` for a fresh headless pixman compositor and private runtime/profile. Pin absolute binary paths and explicitly build the shipped C source with its `build-input.mjs` script; no install hook, service change or permission grant is required. Input binds the generated seat by exact name, creates and retains keyboard/pointer capabilities before Tern starts, and rejects a missing manager or mismatched client generation. Never take the first available seat or sleep to pretend a client is ready.
+
+Run the owned fixture through `e2e.sway.config.ts` with explicit `E2E_SWAY_BINARY`, `E2E_SWAYMSG_BINARY`, `E2E_GRIM_BINARY`, `E2E_TERN_BINARY` and `E2E_INPUT_BINARY`. Control+A must actually replace the native editor's selected text; following ordinary text must prove modifier release. The counter must change from a named-seat pointer click on that surviving client. A zero exit code is not that proof. The separate lifecycle fixture kills only its fresh worker and requires target-finish sweep to remove the recorded native client and sockets. Capture is opt-in and unmasked; keep real application artifacts private.

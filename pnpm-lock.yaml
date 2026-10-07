@@ -219,15 +219,24 @@ importers:
 
   apps/tern-testbed:
     devDependencies:
+      '@e2e-dev/sway':
+        specifier: workspace:*
+        version: link:../../packages/sway
       '@e2e-dev/tern':
         specifier: workspace:*
         version: link:../../packages/tern
       '@stencil-hq/tern':
         specifier: 0.1.0
         version: 0.1.0
+      '@types/node':
+        specifier: 26.6.2
+        version: 26.6.2
       e2e:
         specifier: workspace:*
         version: link:../../packages/e2e
+      typescript:
+        specifier: 7.0.2
+        version: 7.0.2
 
   apps/testbed:
     dependencies:
@@ -302,6 +311,9 @@ importers:
       '@e2e-dev/mobile':
         specifier: workspace:*
         version: link:../packages/mobile
+      '@e2e-dev/sway':
+        specifier: workspace:*
+        version: link:../packages/sway
       '@e2e-dev/tern':
         specifier: workspace:*
         version: link:../packages/tern
@@ -539,6 +551,24 @@ importers:
       vitest:
         specifier: 5.0.1
         version: 5.0.1(@types/node@26.6.2)(vite@8.1.5(@types/node@26.6.2)(esbuild@0.28.2)(jiti@1.21.7)(terser@5.51.2)(tsx@4.23.13)(yaml@2.9.0))
+
+  packages/sway:
+    devDependencies:
+      '@e2e-dev/tern':
+        specifier: workspace:*
+        version: link:../tern
+      '@types/node':
+        specifier: 26.6.2
+        version: 26.6.2
+      e2e:
+        specifier: workspace:*
+        version: link:../e2e
+      typescript:
+        specifier: 7.0.2
+        version: 7.0.2
+      vitest:
+        specifier: 5.0.1
+        version: 5.0.1(@types/node@26.6.2)(vite@8.1.5(@types/node@26.6.2)(esbuild@0.28.2)(jiti@1.21.7)(terser@5.51.2)(tsx@4.23.14)(yaml@2.9.0))
 
   packages/tern:
     devDependencies:

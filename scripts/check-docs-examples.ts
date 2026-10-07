@@ -33,6 +33,7 @@ const EXAMPLES: Record<string, string> = {
   'docs/examples/skill/e2e.config.ts': 'skills/e2e/SKILL.md',
   'docs/examples/skill/e2e.setup.config.ts': 'skills/e2e/references/setup.md',
   'docs/examples/tern/engine.ts': 'docs/tern.mdx',
+  'docs/examples/sway/engine.ts': 'docs/sway.mdx',
 };
 
 function read(path: string): string {
