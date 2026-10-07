@@ -10,6 +10,8 @@ export async function control(lease: TernLease, scenario: string, context: Pick<
   if (!lease.control) throw new EngineError('INVALID_STATE', 'Tern has no explicit control endpoint', { retryable: false });
   context.signal.throwIfAborted();
   try {
+    const after = await lease.guard?.(context.signal);
+    try {
     const { stdout } = await exec(lease.binary, ['ctl', '--control', lease.control, scenario], {
       env: lease.env, signal: context.signal, timeout: Math.max(1, context.timeoutMs), maxBuffer: 8 * 1024 * 1024,
     });
@@ -18,6 +20,7 @@ export async function control(lease: TernLease, scenario: string, context: Pick<
       throw new Error('unsuccessful control reply');
     }
     return result as Record<string, unknown>;
+    } finally { await after?.(); }
   } catch {
     throw new EngineError(mutation ? 'ACTION_MAY_HAVE_COMMITTED' : 'ENGINE_FAILURE',
       mutation ? 'Tern input may have reached the app; do not repeat it' : 'Tern control inspection failed', { retryable: false });
@@ -28,9 +31,12 @@ export async function control(lease: TernLease, scenario: string, context: Pick<
 export async function capture(lease: TernLease, context: OperationContext): Promise<string> {
   const options = { env: lease.env, signal: context.signal, timeout: Math.max(1, context.timeoutMs), maxBuffer: 8 * 1024 * 1024 };
   try {
+    const after = await lease.guard?.(context.signal);
+    try {
     const surface = await exec(lease.binary, ['capture', '--surfaces', lease.pane], options);
     const scrollback = await exec(lease.binary, ['capture', '--scrollback', lease.pane], options);
     return `${surface.stdout}\n${scrollback.stdout}`;
+    } finally { await after?.(); }
   } catch {
     throw new EngineError('ENGINE_FAILURE', 'Explicit Tern capture failed', { retryable: false });
   }

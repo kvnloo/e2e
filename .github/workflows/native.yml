@@ -50,3 +50,5 @@ jobs:
         with:
           name: native-controls
           path: apps/tern-testbed/.e2e/
+  containment:
+    uses: ./.github/workflows/hyprland.yml

@@ -84,8 +84,7 @@ static void stop_descendants(pid_t parent, bool force) {
   }
   closedir(tasks);
 }
-static int supervise(int argc, char **argv) {
-  if (argc < 4 || prctl(PR_SET_CHILD_SUBREAPER, 1) < 0) return 2;
+static int record_identity(const char *path) {
   char stat_path[64], stat_text[4096]; snprintf(stat_path, sizeof stat_path, "/proc/%ld/stat", (long)getpid());
   FILE *stat_file = fopen(stat_path, "r"); if (!stat_file || !fgets(stat_text, sizeof stat_text, stat_file)) return 2; fclose(stat_file);
   char *fields = strrchr(stat_text, ')'); if (!fields) return 2; fields += 2;
@@ -93,11 +92,15 @@ static int supervise(int argc, char **argv) {
   while (field && index < 19) { field = strtok_r(NULL, " ", &save); index++; }
   if (!field) return 2;
   char temporary[4096];
-  int size = snprintf(temporary, sizeof temporary, "%s.next", argv[2]);
+  int size = snprintf(temporary, sizeof temporary, "%s.next", path);
   if (size < 0 || (size_t)size >= sizeof temporary) return 2;
   int fd = open(temporary, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0600); if (fd < 0) return 2;
   if (dprintf(fd, "{\"pid\":%ld,\"start\":\"%s\"}", (long)getpid(), field) < 0 || fsync(fd) < 0) { close(fd); return 2; } close(fd);
-  if (rename(temporary, argv[2]) < 0) return 2;
+  if (rename(temporary, path) < 0) return 2;
+  return 0;
+}
+static int supervise(int argc, char **argv) {
+  if (argc < 4 || prctl(PR_SET_CHILD_SUBREAPER, 1) < 0 || record_identity(argv[2])) return 2;
   if (interrupted) return 0;
   pid_t child = fork(); if (child < 0) return 2;
   if (child == 0) { signal(SIGTERM, SIG_DFL); signal(SIGINT, SIG_DFL); if (setsid() < 0) _exit(126); execv(argv[3], &argv[3]); _exit(127); }
@@ -161,6 +164,8 @@ static int send_key(const char *symbol, unsigned requested_modifiers) {
   xkb_keysym_t keysym = xkb_keysym_from_name(symbol, XKB_KEYSYM_NO_FLAGS);
   if (keysym == XKB_KEY_NoSymbol) return 2;
   uint32_t scalar = xkb_keysym_to_utf32(keysym);
+  /* Chord spelling Control+A means the A key, not an implicit Shift modifier. */
+  if (requested_modifiers && scalar >= 'A' && scalar <= 'Z') { scalar += 'a' - 'A'; keysym = xkb_utf32_to_keysym(scalar); }
   struct key_entry entry = { 0, 0 };
   if (scalar && scalar < 128) entry = ascii_keys[scalar];
   if (!entry.code && scalar <= 127) {
@@ -284,6 +289,12 @@ int main(int argc, char **argv) {
   struct sigaction action = { .sa_handler = interrupt }; sigemptyset(&action.sa_mask);
   sigaction(SIGTERM, &action, NULL); sigaction(SIGINT, &action, NULL); signal(SIGPIPE, SIG_IGN);
   if (argc > 1 && strcmp(argv[1], "supervise") == 0) return supervise(argc, argv);
+  if (argc >= 4 && strcmp(argv[1], "exec-owned") == 0) {
+    if (record_identity(argv[2])) return 2;
+    if (interrupted) return 0;
+    signal(SIGTERM, SIG_DFL); signal(SIGINT, SIG_DFL);
+    execv(argv[3], &argv[3]); return 127;
+  }
   if (argc == 4 && strcmp(argv[1], "stop") == 0) return stop_owned(argv[2], argv[3]);
   if (argc != 4 || strcmp(argv[1], "serve") != 0 || !getenv("XDG_RUNTIME_DIR") || !getenv("WAYLAND_DISPLAY")) return 2;
   wanted_seat = argv[2]; display = wl_display_connect(NULL); if (!display) return 2;
@@ -292,6 +303,7 @@ int main(int argc, char **argv) {
   if (wl_display_roundtrip(display) < 0 || wl_display_roundtrip(display) < 0 || matches != 1 || !keyboard_manager || !pointer_manager) goto cleanup;
   keyboard = zwp_virtual_keyboard_manager_v1_create_virtual_keyboard(keyboard_manager, seat);
   pointer = zwlr_virtual_pointer_manager_v1_create_virtual_pointer(pointer_manager, seat);
+  if (!keyboard || !pointer) goto cleanup;
   if (initialize_keymap() || wl_display_roundtrip(display) < 0 || (named_capabilities & (WL_SEAT_CAPABILITY_KEYBOARD | WL_SEAT_CAPABILITY_POINTER)) != (WL_SEAT_CAPABILITY_KEYBOARD | WL_SEAT_CAPABILITY_POINTER)) goto cleanup;
   struct sockaddr_un address = { .sun_family = AF_UNIX };
   if (strlen(argv[3]) >= sizeof address.sun_path) goto cleanup;

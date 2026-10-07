@@ -31,6 +31,10 @@ export interface TernLease {
   readonly input?: TernInput;
   readonly client?: { readonly pid: number; readonly start: string };
   readonly recordPath?: string;
+  /** Checks resource ownership before a request; returned callback proves its boundary afterward. */
+  readonly guard?: (signal: AbortSignal) => Promise<() => Promise<void>>;
+  /** Raw owned-output PNG, private caller use only; not the engine's secret-safe screenshot capability. */
+  readonly capture?: (signal: AbortSignal) => Promise<Uint8Array>;
 }
 
 /** Resources are acquired in startAttempt and released even after partial setup fails. */

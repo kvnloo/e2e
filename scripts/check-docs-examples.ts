@@ -34,6 +34,7 @@ const EXAMPLES: Record<string, string> = {
   'docs/examples/skill/e2e.setup.config.ts': 'skills/e2e/references/setup.md',
   'docs/examples/tern/engine.ts': 'docs/tern.mdx',
   'docs/examples/sway/engine.ts': 'docs/sway.mdx',
+  'docs/examples/hyprland/engine.ts': 'docs/hyprland.mdx',
 };
 
 function read(path: string): string {

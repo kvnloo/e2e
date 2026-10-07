@@ -19,6 +19,7 @@
     "apps/tern-testbed/src/controls.mjs",
     "packages/tern/tests/types/options.ts",
     "packages/sway/tests/types/options.ts",
+    "packages/hyprland/tests/types/options.ts",
     "packages/sway/scripts/build-input.mjs",
     "apps/tern-testbed/scripts/**/*.ts",
     "packages/e2e/tests/types/sdk-types.ts",

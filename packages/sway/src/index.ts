@@ -9,6 +9,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { ConfigurationError, EngineError, parseKey, type EngineCleanupContext } from 'e2e/engine';
 import type { TernLease, TernProvider, TernRequest } from '@e2e-dev/tern';
 import { processIdentity, stillOwned, ownedDirectory, childPids, type ProcessIdentity } from './ownership.ts';
+export { processIdentity, stillOwned, ownedDirectory, type ProcessIdentity } from './ownership.ts';
 const exec = promisify(execFile);
 
 export interface OwnedWaylandParent {
@@ -16,6 +17,7 @@ export interface OwnedWaylandParent {
   readonly waylandDisplay: string;
   /** The parent owns silent placement policy; no uncontained direct host spawn. */
   launch(binary: string, args: readonly string[], env: Readonly<Record<string, string>>, identityFile: string, signal: AbortSignal): Promise<ProcessIdentity>;
+  guard?(signal: AbortSignal): Promise<() => Promise<void>>;
 }
 export interface SwayOptions {
   readonly binaries: { readonly sway: string; readonly swaymsg: string; readonly tern: string; readonly grim: string; readonly input: string };
@@ -23,6 +25,9 @@ export interface SwayOptions {
   readonly env?: Readonly<Record<string, string>>;
   readonly root?: string;
   readonly parent?: OwnedWaylandParent;
+  /** GLES is only for an explicitly selected, already-readable render node. */
+  readonly renderer?: 'pixman' | 'gles2';
+  readonly renderDevice?: string;
 }
 export interface SwayDisplay {
   readonly id: string;
@@ -68,6 +73,7 @@ async function recordedProcesses(directory: string, processes: readonly ProcessI
 export async function swayDisplay(options: SwayOptions, request: TernRequest): Promise<SwayDisplay> {
   if (process.platform !== 'linux') throw new ConfigurationError('INVALID_CONFIG', 'Sway requires Linux');
   for (const binary of Object.values(options.binaries)) if (!isAbsolute(binary)) throw new ConfigurationError('INVALID_CONFIG', 'Native binaries must be explicit absolute pinned paths');
+  if (options.renderer === 'gles2' && (!options.renderDevice || !/^\/dev\/dri\/renderD\d+$/.test(options.renderDevice))) throw new ConfigurationError('INVALID_CONFIG', 'GLES requires an explicit render-only DRM node');
   const size = options.size ?? { width: 1280, height: 900 };
   if (![size.width, size.height].every(value => Number.isInteger(value) && value >= 320 && value <= 8192)) throw new ConfigurationError('INVALID_CONFIG', 'Invalid isolated display size');
   const root = runDirectory(options, request.runId, request.targetName);
@@ -82,8 +88,9 @@ export async function swayDisplay(options: SwayOptions, request: TernRequest): P
   const output = options.parent ? 'WL-1' : 'HEADLESS-1';
   const env: Record<string, string> = { PATH: request.env.PATH ?? '/usr/bin:/bin', LANG: 'C.UTF-8', ...options.env,
     HOME: join(directory, 'home'), XDG_CONFIG_HOME: join(directory, 'config'), XDG_CACHE_HOME: join(directory, 'cache'), XDG_STATE_HOME: join(directory, 'state'), XDG_RUNTIME_DIR: join(directory, 'run'),
-    WLR_BACKENDS: options.parent ? 'wayland' : 'headless', WLR_RENDERER: 'pixman', WLR_HEADLESS_OUTPUTS: '1', WLR_WL_OUTPUTS: '1',
+    WLR_BACKENDS: options.parent ? 'wayland' : 'headless', WLR_RENDERER: options.renderer ?? 'pixman', WLR_HEADLESS_OUTPUTS: '1', WLR_WL_OUTPUTS: '1',
     TERN_CONFIG_DIR: join(directory, 'config', 'tern'), SHELL: '/bin/bash' };
+  if (options.renderDevice) env.WLR_RENDER_DRM_DEVICE = options.renderDevice;
   const config = join(directory, 'sway.conf');
   await writeFile(config, `output ${output} mode ${size.width}x${size.height}\noutput ${output} scale 1\ndefault_border none\nxwayland disable\nseat ${seat} fallback true\nseat ${seat} attach "*"\nfocus_follows_mouse yes\n`, { mode: 0o600 });
   const record: LeaseRecord = { version: 1, runId: request.runId, targetName: request.targetName, directory, processes: [] };
@@ -135,8 +142,8 @@ export async function swayDisplay(options: SwayOptions, request: TernRequest): P
       const { stdout } = await exec(options.binaries.swaymsg, ['--socket', env.SWAYSOCK!, '--type', type, '--raw'], { env, signal, timeout: 5000, maxBuffer: 8 * 1024 * 1024 });
       return JSON.parse(stdout) as T;
     };
-    const outputs = await ipc<Array<{ name: string; active: boolean }>>('get_outputs', request.signal);
-    if (outputs.length !== 1 || outputs[0]?.name !== output || !outputs[0].active) throw new EngineError('NOT_ACTIONABLE', 'Isolated output identity differs from the lease', { retryable: false });
+    const outputs = await ipc<Array<{ name: string; active: boolean; rect: { width: number; height: number }; scale: number }>>('get_outputs', request.signal);
+    if (outputs.length !== 1 || outputs[0]?.name !== output || !outputs[0].active || outputs[0].rect.width !== size.width || outputs[0].rect.height !== size.height || outputs[0].scale !== 1) throw new EngineError('NOT_ACTIONABLE', 'Isolated output identity or measured geometry differs from the lease', { retryable: false });
     const seats = await ipc<Seat[]>('get_seats', request.signal);
     if (seats.filter(item => item.name === seat).length !== 1) throw new EngineError('NOT_ACTIONABLE', 'Named isolated input seat is unavailable', { retryable: false });
     const names = await readdir(env.XDG_RUNTIME_DIR!);
@@ -156,6 +163,8 @@ export async function swayDisplay(options: SwayOptions, request: TernRequest): P
     }
     const input = async (header: string, payload: string, signal: AbortSignal): Promise<void> => {
       signal.throwIfAborted();
+      const after = await options.parent?.guard?.(signal);
+      try {
       await new Promise<void>((accept, reject) => {
         const socket = createConnection({ path: inputSocket });
         const abort = () => socket.destroy(new Error('Native input cancelled'));
@@ -179,6 +188,7 @@ export async function swayDisplay(options: SwayOptions, request: TernRequest): P
         socket.once('error', () => finish(new EngineError('ACTION_MAY_HAVE_COMMITTED', 'Persistent input transport failed', { retryable: false })));
         socket.once('end', () => finish(new EngineError('ACTION_MAY_HAVE_COMMITTED', 'Persistent input disconnected before acknowledgment', { retryable: false })));
       });
+      } finally { await after?.(); }
     };
     let client: Container | undefined;
     let clientIdentity: ProcessIdentity | undefined;
@@ -214,7 +224,11 @@ export async function swayDisplay(options: SwayOptions, request: TernRequest): P
         const mask = parsed.modifiers.reduce((value, name) => value | modifiers[name]!, 0);
         await input(`K ${mask} ${symbol}\n`, '', signal);
       },
-      async capture(signal) { const result = await exec(options.binaries.grim, ['-o', output, '-'], { env, signal, timeout: 5000, encoding: 'buffer', maxBuffer: 64 * 1024 * 1024 }); return result.stdout; },
+      async capture(signal) {
+        const after = await options.parent?.guard?.(signal);
+        try { const result = await exec(options.binaries.grim, ['-o', output, '-'], { env, signal, timeout: 5000, encoding: 'buffer', maxBuffer: 64 * 1024 * 1024 }); return result.stdout; }
+        finally { await after?.(); }
+      },
     };
   } catch (error) {
     await release({ signal: AbortSignal.timeout(15000), timeoutMs: 15000 } as EngineCleanupContext);
@@ -263,7 +277,12 @@ export function sway(options: SwayOptions): TernProvider {
         if (!display.nativeClient) throw new EngineError('INVALID_STATE', 'Owned native client identity was not established', { retryable: false });
         await mkdir(request.artifactsDir, { recursive: true, mode: 0o700 });
         await writeFile(join(request.artifactsDir, 'native-client.json'), JSON.stringify({ client: display.nativeClient, seat: display.seat, output: display.output, lease: display.id }), { mode: 0o600 });
-        return { id: display.id, pane: String(state.focused.id), mode: 'native', control, binary: options.binaries.tern, env: display.env, client: display.nativeClient, input: { type: display.type, press: display.press, tap: display.tap } } satisfies TernLease;
+        return { id: display.id, pane: String(state.focused.id), mode: 'native', control, binary: options.binaries.tern, env: display.env, client: display.nativeClient, capture: display.capture, guard: async signal => {
+          const client=display.nativeClient;
+          if(!client||!await stillOwned(client)) throw new EngineError('NOT_ACTIONABLE','Owned native client generation changed',{retryable:false});
+          const after=await options.parent?.guard?.(signal);
+          return async()=>{ if(!await stillOwned(client)) throw new EngineError('ACTION_MAY_HAVE_COMMITTED','Owned native client exited across the operation',{retryable:false}); await after?.(); };
+        }, input: { type: display.type, press: display.press, tap: display.tap } } satisfies TernLease;
       } catch (error) { await display.release({ signal: AbortSignal.timeout(15000), timeoutMs: 15000 } as EngineCleanupContext); displays.delete(display.id); throw error; }
     },
     async release(lease, context) { const display = displays.get(lease.id); if (!display) return; await display.release(context); displays.delete(lease.id); },

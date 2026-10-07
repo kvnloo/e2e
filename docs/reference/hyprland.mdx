@@ -1,0 +1,31 @@
+---
+title: "Hyprland provider"
+description: "Explicit placement ownership around private Sway input."
+---
+
+Import `hyprland` and `HyprlandOptions` from `@e2e-dev/hyprland`. Pass the returned `TernProvider` to `ternEngine`. See the [containment guide](/hyprland) for required native acceptance and public runtime prerequisites.
+
+## `HyprlandOptions`
+
+| Field | Contract |
+| --- | --- |
+| `host.instance` | Exact explicitly owned Hyprland instance signature. No discovery or fallback. |
+| `host.runtimeDir` | Absolute caller-owned mode-0700 runtime directory containing that instance and display. |
+| `host.waylandDisplay` | Exact owned `wayland-N` socket; must match the compositor's PID/display lock. |
+| `host.hyprctl` | Absolute explicit controller binary. |
+| `protectedWorkspaces` | Required nonempty numeric ids and/or names which must not be activated or reused. |
+| `protectedOutputs` | Required unique exact names whose workspace/layout/focus state is measured. Missing outputs fail closed. |
+| `workspace` | Optional unique named workspace; it must not already exist or be configured. Otherwise a nonce name is generated. |
+| `sway` | Explicit Sway binaries, optional logical size and curated environment; parent/root are supplied by containment. |
+| `root` | Optional private durable containment-record directory. |
+| `nativeRoot` | Optional absolute mode-0700 short shared directory, at most 16 UTF-8 bytes, for nested Unix socket paths. |
+
+Ownership requires the parent PID/start time, one generated output/tag, new nonpersistent visible workspace, exact child PID/start time, mapped native geometry and unfocused parent output. Stock Sway app class is not used as a unique id. Supported source-reviewed API versions are 0.53.0 and 0.56.2; the real disposable gate pins the latter's exact source commit.
+
+## Operations and cleanup
+
+`acquire` saves durable ownership before mutation, creates only its own named headless output and renames only the observed new empty workspace. Atomic no-focus placement is read back before the Sway provider accepts input. Guards measure the declared human boundary before and after native observations, keyboard, pointer and output capture. A changed boundary or uncertain action is nonretryable; never replay input or restore focus.
+
+`release` removes the recorded child tree and output only after exact identity and foreign-client checks. `sweep` recovers only the supplied run/target's mode-0700 ownership records. A foreign client, changed host generation or unsafe workspace prevents destructive cleanup and leaves evidence for the caller; there is no broad PID kill, output pattern deletion, reload or persistent rule restoration.
+
+`lease.capture(signal)` returns raw owned-output PNG bytes for private callers. It is not secret-masked and does not enable the engine screenshot capability. `hyprland-proof.jsonl` contains scoped opaque ids, geometry, workspaces, focus and cursor, not window titles. Keep real application artifacts private.
