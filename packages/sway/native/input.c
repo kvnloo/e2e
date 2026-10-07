@@ -223,16 +223,23 @@ static int send_key(const char *symbol, unsigned requested_modifiers) {
   release_keys();
   return wl_display_roundtrip(display) < 0 ? 2 : 0;
 }
-static int text(const unsigned char *value) {
-  while (*value && !interrupted) {
-    uint32_t scalar; unsigned extra;
-    if (*value < 0x80) { scalar = *value++; extra = 0; }
-    else if ((*value & 0xe0) == 0xc0) { scalar = *value++ & 0x1f; extra = 1; }
-    else if ((*value & 0xf0) == 0xe0) { scalar = *value++ & 0x0f; extra = 2; }
-    else if ((*value & 0xf8) == 0xf0) { scalar = *value++ & 7; extra = 3; }
+static int text(FILE *connection, size_t remaining) {
+  while (remaining && !interrupted) {
+    int first = fgetc(connection); remaining--;
+    if (first <= 0) return 2;
+    uint32_t scalar, minimum; unsigned extra;
+    if (first < 0x80) { scalar = (uint32_t)first; extra = 0; minimum = 0; }
+    else if ((first & 0xe0) == 0xc0) { scalar = first & 0x1f; extra = 1; minimum = 0x80; }
+    else if ((first & 0xf0) == 0xe0) { scalar = first & 0x0f; extra = 2; minimum = 0x800; }
+    else if ((first & 0xf8) == 0xf0) { scalar = first & 7; extra = 3; minimum = 0x10000; }
     else return 2;
-    for (unsigned i = 0; i < extra; i++) { if ((*value & 0xc0) != 0x80) return 2; scalar = (scalar << 6) | (*value++ & 0x3f); }
-    if (scalar > 0x10ffff || (scalar >= 0xd800 && scalar <= 0xdfff)) return 2;
+    if (remaining < extra) return 2;
+    for (unsigned i = 0; i < extra; i++) {
+      int continuation = fgetc(connection); remaining--;
+      if (continuation < 0 || (continuation & 0xc0) != 0x80) return 2;
+      scalar = (scalar << 6) | (continuation & 0x3f);
+    }
+    if (scalar < minimum || scalar > 0x10ffff || (scalar >= 0xd800 && scalar <= 0xdfff)) return 2;
     char symbol[24]; snprintf(symbol, sizeof symbol, "U%04X", scalar);
     const char *key = scalar == '\n' ? "Return" : scalar == '\t' ? "Tab" : symbol;
     if (send_key(key, 0)) return 2;
@@ -255,12 +262,7 @@ static int request(FILE *connection) {
     result = wl_display_roundtrip(display) < 0 ? 2 : 0;
   } else {
     size_t size;
-    if (sscanf(header, "T %zu", &size) == 1 && size <= 4 * 1024 * 1024) {
-      unsigned char *value = malloc(size + 1);
-      if (!value) return 2;
-      if (fread(value, 1, size, connection) == size && !memchr(value, 0, size)) { value[size] = 0; result = text(value); }
-      free(value);
-    }
+    if (sscanf(header, "T %zu", &size) == 1 && size <= 4 * 1024 * 1024) result = text(connection, size);
   }
   release_keys();
   if (pointer_down) { zwlr_virtual_pointer_v1_button(pointer, clock_ms(), 0x110, WL_POINTER_BUTTON_STATE_RELEASED); pointer_down = false; zwlr_virtual_pointer_v1_frame(pointer); }

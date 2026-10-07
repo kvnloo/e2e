@@ -194,6 +194,10 @@ export async function swayDisplay(options: SwayOptions, request: TernRequest): P
     let clientIdentity: ProcessIdentity | undefined;
     const assertFocus = async (signal: AbortSignal): Promise<void> => {
       if (!client || !clientIdentity || !await stillOwned(clientIdentity) || (await ipc<Seat[]>('get_seats', signal)).find(item => item.name === seat)?.focus !== client.id) throw new EngineError('NOT_ACTIONABLE', 'Named seat does not focus the leased native client generation', { retryable: false });
+      const pending=[await ipc<Container>('get_tree',signal)], matching: Container[]=[];
+      while(pending.length){const node=pending.pop()!;if(node.id===client.id&&node.pid===clientIdentity.pid)matching.push(node);pending.push(...node.nodes??[],...node.floating_nodes??[]);}
+      if(matching.length!==1) throw new EngineError('NOT_ACTIONABLE','Owned native window geometry is not unique',{retryable:false});
+      client=matching[0]!;
     };
     const pointer = async (x: number, y: number, button: boolean, signal: AbortSignal): Promise<void> => {
       if (![x, y].every(Number.isFinite) || x < 0 || y < 0 || x >= size.width || y >= size.height) throw new EngineError('NOT_ACTIONABLE', 'Pointer is outside the isolated output', { retryable: false });
@@ -201,7 +205,7 @@ export async function swayDisplay(options: SwayOptions, request: TernRequest): P
     };
     return { id: directory, directory, seat, output, env, spawn: launch, release, pointer,
       get nativeClient() { return clientIdentity; },
-      async tap(x, y, signal) { await assertFocus(signal); await pointer(x, y, true, signal); },
+      async tap(x, y, signal) { await assertFocus(signal); await pointer(client!.rect.x+x, client!.rect.y+y, true, signal); },
       async focusClient(pid, signal) {
         const tree = await ipc<Container>('get_tree', signal);
         const pending = [tree]; const matching: Container[] = [];
