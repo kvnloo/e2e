@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { readdir, readFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { promisify } from "node:util";
 import { createHash } from "node:crypto";
@@ -35,7 +35,7 @@ export interface TernOptions {
   readonly pane?: string;
   /** Optional TSP record. Tool heads come from this file when the control tree is absent. */
   readonly record?: string;
-  /** Control socket. Default: `TERN_CONTROL`, else the socket whose state lists the pane. */
+  /** Control socket. Default: `TERN_CONTROL`, then Tern's default `/tmp/tern.sock`. */
   readonly control?: string;
 }
 
@@ -93,15 +93,10 @@ export function ternEngine(options: TernOptions = {}): EngineHandle {
   let hits = new Map<string, Hit>();
 
   async function findSocket(id: string): Promise<string | undefined> {
+    // Pane ids can collide across independent Tern instances. Never scan
+    // arbitrary sockets: use the configured/env socket or Tern's default,
+    // then verify that the selected instance owns this pane.
     const candidates = [socket, "/tmp/tern.sock"].filter((item): item is string => Boolean(item));
-    try {
-      const names = await readdir("/tmp");
-      for (const name of names) {
-        if (name.startsWith("tern") && name.endsWith(".sock")) candidates.push(`/tmp/${name}`);
-      }
-    } catch {
-      // A missing /tmp is not a reason to fail the observe.
-    }
     const tried = new Set<string>();
     for (const candidate of candidates) {
       if (tried.has(candidate)) continue;
