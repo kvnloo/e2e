@@ -18,7 +18,7 @@ Import `hyprland` and `HyprlandOptions` from `@e2e-dev/hyprland`. Pass the retur
 | `workspace` | Optional unique named workspace; it must not already exist or be configured. Otherwise a nonce name is generated. |
 | `sway` | Explicit Sway binaries, optional logical size and curated environment; parent/root are supplied by containment. |
 | `root` | Optional private durable containment-record directory. |
-| `nativeRoot` | Optional absolute mode-0700 short shared directory, at most 16 UTF-8 bytes, for nested Unix socket paths. |
+| `nativeRoot` | Optional absolute mode-0700 short shared directory, at most 14 UTF-8 bytes, for nested Unix socket paths. |
 
 Ownership requires the parent PID/start time, one generated output/tag, new nonpersistent visible workspace, exact child PID/start time, mapped native geometry and unfocused parent output. Stock Sway app class is not used as a unique id. Supported source-reviewed API versions are 0.53.0 and 0.56.2; the real disposable gate pins the latter's exact source commit.
 

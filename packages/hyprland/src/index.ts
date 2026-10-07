@@ -148,7 +148,8 @@ export function hyprland(options: HyprlandOptions): TernProvider {
       if(workspaces.some(w=>w.name===workspace)||rules.some(r=>r.workspaceString===`name:${workspace}`||r.workspaceString===workspace)) throw fail('Refusing occupied, empty-existing or configured workspace');
       const root=runRoot(options,request.runId,request.targetName); await mkdir(dirname(root),{recursive:true,mode:0o700}); await ownedDirectory(dirname(root)); await mkdir(root,{recursive:true,mode:0o700}); await ownedDirectory(root);
       const nativeRoot=options.nativeRoot??join(tmpdir(),`hp-${process.getuid?.()}`);
-      if(!isAbsolute(nativeRoot)||Buffer.byteLength(nativeRoot)>16) throw new ConfigurationError('INVALID_CONFIG','Native compositor root must be an explicit short absolute directory');
+      // The child suffix adds 9 bytes; Sway's run/target hash adds another 25 to its 48-byte root budget.
+      if(!isAbsolute(nativeRoot)||Buffer.byteLength(nativeRoot)>14) throw new ConfigurationError('INVALID_CONFIG','Native compositor root must be an explicit absolute directory of at most 14 bytes');
       await mkdir(nativeRoot,{recursive:true,mode:0o700}); await ownedDirectory(nativeRoot);
       const directory=await mkdtemp(join(root,'attempt-')), childRoot=await mkdtemp(join(nativeRoot,'s-'));
       await mkdir(request.artifactsDir,{recursive:true,mode:0o700});
