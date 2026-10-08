@@ -23,7 +23,7 @@ export interface HyprlandOptions {
   /** Disposable guest only: explicit namespace entrant and host-created read-only config mount. */
   readonly guest?:{readonly nsenter:string;readonly configurationRoot:string};
 }
-interface Record { version: 1; runId: string; targetName: string; directory: string; output: string; tag: string; workspace: string; childRoot: string; childIdentity?:{dev:number;ino:number}; host: ProcessIdentity; existingWorkspaces: number[]; outputRequested?: boolean; workspaceId?: number; workspaceOriginalName?: string; workspaceRenamed?: boolean; identityFile?: string; child?: ProcessIdentity; outputId?: number; outputGeometry?: {x:number;y:number;width:number;height:number;scale:number}; artifactsDir: string; artifactsReady?: boolean }
+interface Record { version: 2; runId: string; targetName: string; directory: string; output: string; tag: string; workspace: string; childRoot: string; childIdentity?:{dev:number;ino:number}; host: ProcessIdentity; existingWorkspaces: number[]; outputRequested?: boolean; workspaceId?: number; workspaceOriginalName?: string; workspaceRenamed?: boolean; identityFile?: string; child?: ProcessIdentity; outputId?: number; outputGeometry?: {x:number;y:number;width:number;height:number;scale:number}; artifactsDir: string; artifactsReady?: boolean }
 interface Workspace { id: number; name: string; monitorID: number | string; windows: number; ispersistent: boolean }
 const fail = (message: string) => new EngineError('INVALID_STATE', message, { retryable: false });
 const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
@@ -44,7 +44,11 @@ function controller(options: HyprlandOptions) {
       return undefined;
     } catch { throw fail('Explicit Hyprland IPC failed; no alternate instance or host input fallback'); }
   };
-  return { command, query: async <T>(name: string, signal: AbortSignal) => await command([name], signal, true) as T };
+  const dispatch=async(receipt:string,input:string,args:string[],signal:AbortSignal):Promise<void>=>{
+    try{const {stdout}=await exec(input,['dispatch-owned',receipt,options.host.hyprctl,'-i',options.host.instance,...args],{env,signal,timeout:5000,maxBuffer:8*1024*1024});if(stdout.trim()!=='ok')throw new Error('IPC refused');}
+    catch{throw fail('Fenced Hyprland launch dispatch failed or is uncertain; no unowned retry');}
+  };
+  return { command, dispatch, query: async <T>(name: string, signal: AbortSignal) => await command([name], signal, true) as T };
 }
 async function hostIdentity(options: HyprlandOptions): Promise<ProcessIdentity> {
   await ownedDirectory(options.host.runtimeDir);
@@ -64,7 +68,19 @@ async function privateBoundary(hostRoot:string,guestRoots:readonly string[]):Pro
   const host=await realpath(hostRoot);
   for(const path of guestRoots){const guest=await realpath(path);if(host===guest||host.startsWith(guest+sep))throw fail('Host lease journal is reachable through a guest-writable root');}
 }
-async function removeChildRoot(path:string):Promise<void>{try{await ownedDirectory(path);await rmdir(path);}catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;}}
+async function childDirectoryInfo(path:string){try{return await lstat(path);}catch(error){if((error as NodeJS.ErrnoException).code==='ENOENT')return undefined;throw error;}}
+async function removeChildRoot(record:Record,options:HyprlandOptions,context:EngineCleanupContext):Promise<void>{
+  if(!record.childIdentity)return;const identity=record.childIdentity,claim=join(record.directory,'claimed-child');
+  const matches=(info:Awaited<ReturnType<typeof childDirectoryInfo>>)=>info?.isDirectory()===true&&info.dev===identity.dev&&info.ino===identity.ino&&info.uid===process.getuid?.()&&(info.mode&0o077)===0;
+  if(!await childDirectoryInfo(claim)){
+    if(matches(await childDirectoryInfo(join(record.directory,'child-stage'))))return;
+    const source=await childDirectoryInfo(record.childRoot);if(!source)return;
+    if(!matches(source))throw fail('Child root was replaced; retain cleanup evidence');
+    await exec(options.sway.binaries.input,['claim-root',record.childRoot,claim,String(identity.dev),String(identity.ino)],{signal:context.signal,timeout:context.timeoutMs});
+  }
+  if(!matches(await childDirectoryInfo(claim)))throw fail('Private child-root claim does not match owned inode; preserve it');
+  try{await rmdir(claim);}catch(error){if((error as NodeJS.ErrnoException).code==='ENOTEMPTY')await exec(options.sway.binaries.input,['publish-root',claim,record.childRoot],{signal:context.signal,timeout:context.timeoutMs});throw error;}
+}
 function resource(options: HyprlandOptions, record: Record) {
   const ctl = controller(options), size = options.sway.size ?? { width: 1280, height: 900 };
   const proof = async (signal: AbortSignal) => {
@@ -91,21 +107,33 @@ function resource(options: HyprlandOptions, record: Record) {
     if (tagged.length > 1 || onOutput.some(c=>!(childAlive&&c.pid===record.child!.pid))) throw fail('Refusing output with a foreign client');
     if (tagged.length) {
       if (!record.child || !await ownedDescendant(record.child,record.host)) throw fail('Tagged client does not belong to the independently verified parent process generation');
-      if(requireChild) ownedClient(tagged[0]!, record.child.pid, record.tag, output, record.workspace, size);
+      ownedClient(tagged[0]!, record.child.pid, record.tag, output, record.workspace, size);
     } else if (requireChild) throw fail('Owned nested client is absent');
     return output;
   };
   const guard = async (signal: AbortSignal) => { await verify(signal,true); const before=await proof(signal); return async()=>{ await verify(signal,true); await log('operation',before,await proof(signal)); }; };
+  const dispatchReceipt=join(record.directory,'dispatch.json');
+  const closeDispatch=async(signal:AbortSignal,timeoutMs:number)=>{await exec(options.sway.binaries.input,['close',dispatchReceipt],{env:{PATH:'/usr/bin:/bin'},signal,timeout:timeoutMs});};
+  const pendingEndpoint=(identityFile:string)=>{
+    const run=join(record.childRoot,createHash('sha256').update(record.runId).update('\0').update(record.targetName).digest('hex').slice(0,24)),attempt=dirname(identityFile);
+    if(dirname(attempt)!==run||!/^attempt-[A-Za-z0-9]{6}$/.test(basename(attempt))||!/^launch-[a-f0-9-]{36}\.json$/.test(basename(identityFile))||(record.identityFile!==undefined&&record.identityFile!==identityFile))throw fail('Pending parent recovery endpoint changed');
+  };
   const parent:OwnedWaylandParent={runtimeDir:options.host.runtimeDir,waylandDisplay:options.host.waylandDisplay,guard,
     ...(options.guest?{guest:{target:record.host,nsenter:options.guest.nsenter}}:{}),
-    async recover(identityFile,signal){if(identityFile!==record.identityFile)throw fail('Pending parent recovery endpoint changed');await verify(signal,false);return record.child;},
+    async recover(identityFile,signal){
+      pendingEndpoint(identityFile);await closeDispatch(signal,5000);await verify(signal,false);
+      if(record.child)return {kind:'PROCESS',identity:record.child};
+      try{await readFile(dispatchReceipt,'utf8');return {kind:'UNKNOWN'};}
+      catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;return {kind:'NEVER_LAUNCHED'};}
+    },
     async launch(binary,args,env,identityFile,signal) {
       if (args[0]!=='supervise' || args[1]!==identityFile || args[2]!==options.sway.binaries.sway) throw fail('Only the exact owned nested compositor may be launched');
+      pendingEndpoint(identityFile);
       await verify(signal,false); await ownedDirectory(dirname(identityFile));
       const before=await proof(signal); record.identityFile=identityFile; await save(record);
       const environment=Object.entries(env).map(([key,value])=>{ if(!/^[A-Z_][A-Z0-9_]*$/.test(key)) throw fail('Invalid curated environment key'); return `${key}=${value}`; });
       const rules=`monitor ${record.output}; workspace name:${record.workspace} silent; tag +${record.tag}; float on; size ${size.width} ${size.height}; border_size 0; no_shadow on; no_initial_focus on; no_focus on`;
-      await ctl.command(['dispatch','exec',`[${rules}] exec /usr/bin/env -i ${[...environment,binary,'exec-owned',identityFile,...args.slice(2)].map(quote).join(' ')}`],signal);
+      signal.throwIfAborted();await ctl.dispatch(dispatchReceipt,options.sway.binaries.input,['dispatch','exec',`[${rules}] exec /usr/bin/env -i ${[...environment,binary,'exec-owned',identityFile,...args.slice(2)].map(quote).join(' ')}`],signal);
       const deadline=Date.now()+15000;
       let candidate:ProcessIdentity|undefined;
       for (;;) {
@@ -126,12 +154,14 @@ function resource(options: HyprlandOptions, record: Record) {
   const provider=sway({...options.sway,root:record.childRoot,journalRoot:join(record.directory,'sway-journals'),configurationRoot:options.guest?.configurationRoot,parent});
   const close = async(context: EngineCleanupContext, lease?: TernLease) => {
     const signal=context.signal, before=await proof(signal);
+    await closeDispatch(signal,context.timeoutMs);
     if(record.identityFile){try{await ownedDirectory(dirname(record.identityFile));const args=['close',record.identityFile];await exec(options.sway.binaries.input,options.guest?['enter-ns',String(record.host.pid),record.host.start,options.guest.nsenter,options.sway.binaries.input,...args]:args,{env:{PATH:'/usr/bin:/bin'},signal,timeout:context.timeoutMs});}catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;}}
     const monitors=await ctl.query<Monitor[]>('monitors',signal);
     if(monitors.some(m=>m.name===record.output)) await verify(signal,false);
     if(!record.child&&record.identityFile){const deadline=Date.now()+context.timeoutMs;for(;;){await verify(signal,false);if(record.child)break;let candidate:ProcessIdentity;try{candidate=JSON.parse(await readFile(record.identityFile,'utf8')) as ProcessIdentity;}catch(error){if((error as NodeJS.ErrnoException).code==='ENOENT')break;throw error;}if(!await stillOwned(candidate))break;if(!await ownedDescendant(candidate,record.host))throw fail('Refusing an unverified guest cleanup receipt');if(Date.now()>=deadline)throw fail('Published nested process never established independently verified tagged containment');await delay(25,undefined,{signal});}}
     if(lease) await provider.release(lease,context);
     await provider.sweep!({runId:record.runId,targetName:record.targetName,env:{}},context);
+    if(!record.child){try{await readFile(dispatchReceipt,'utf8');throw fail('Published launch dispatch lacks authenticated child authority; retain containment evidence');}catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;}}
     if(record.child&&await stillOwned(record.child)){await verify(signal,false);if(!await ownedDescendant(record.child,record.host))throw fail('Refusing changed nested process ancestry');await exec(options.sway.binaries.input,['stop',String(record.child.pid),record.child.start],{env:{PATH:'/usr/bin:/bin'},signal,timeout:context.timeoutMs});const deadline=Date.now()+context.timeoutMs;while(await stillOwned(record.child)){if(Date.now()>=deadline)throw fail('Exact nested generation survived cleanup');await delay(25,undefined,{signal});}}
     if(monitors.some(m=>m.name===record.output)) {
       await verify(signal,false);
@@ -145,7 +175,7 @@ function resource(options: HyprlandOptions, record: Record) {
       if(Date.now()>=deadline) throw fail('Owned nonpersistent workspace survived cleanup');
       await delay(25,undefined,{signal});
     }
-    if(record.childIdentity){try{const info=await lstat(record.childRoot);if(info.dev===record.childIdentity.dev&&info.ino===record.childIdentity.ino){if(options.guest)await exec(options.sway.binaries.input,['enter-ns',String(record.host.pid),record.host.start,options.guest.nsenter,'/usr/bin/rmdir','--',record.childRoot],{signal,timeout:context.timeoutMs});else await removeChildRoot(record.childRoot);}}catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;}}
+    await removeChildRoot(record,options,context);
     await rm(record.directory,{recursive:true});
   };
   return {provider,close,verify,proof,log,ctl};
@@ -171,14 +201,14 @@ export function hyprland(options: HyprlandOptions): TernProvider {
       await privateBoundary(dirname(root),[nativeRoot,options.host.runtimeDir]);
       if(options.guest){await ownedDirectory(options.guest.configurationRoot);await privateBoundary(options.guest.configurationRoot,[nativeRoot,options.host.runtimeDir]);}
       const directory=await mkdtemp(join(root,'attempt-')), childRoot=join(nativeRoot,`s-${token.slice(0,6)}`);
-      const record: Record={version:1,runId:request.runId,targetName:request.targetName,directory,childRoot,host,existingWorkspaces:workspaces.map(w=>w.id),output:`e2e-${token}`,tag:`e2e-${token}`,workspace,artifactsDir:request.artifactsDir};
+      const record: Record={version:2,runId:request.runId,targetName:request.targetName,directory,childRoot,host,existingWorkspaces:workspaces.map(w=>w.id),output:`e2e-${token}`,tag:`e2e-${token}`,workspace,artifactsDir:request.artifactsDir};
       try{await save(record);}catch(error){await rm(directory,{recursive:true});throw error;}
       const owned=resource(options,record);
       try {
         const stage=join(record.directory,'child-stage');await mkdir(stage,{mode:0o700});const info=await lstat(stage);record.childIdentity={dev:info.dev,ino:info.ino};await save(record);
         await mkdir(request.artifactsDir,{recursive:true,mode:0o700});
         record.artifactsReady=true;await save(record);
-        await exec(options.sway.binaries.input,['publish-root',stage,childRoot],{signal:request.signal,timeout:5000});await ownedDirectory(childRoot);
+        await exec(options.sway.binaries.input,['publish-root',stage,childRoot,join(record.directory,'dispatch.json')],{signal:request.signal,timeout:5000});await ownedDirectory(childRoot);
         const before=await owned.proof(request.signal);
         if((await ctl.query<Monitor[]>('monitors',request.signal)).some(m=>m.name===record.output)||(await ctl.query<Client[]>('clients',request.signal)).some(c=>c.tags.includes(record.tag))) throw fail('Generated output/tag collision');
         record.outputRequested=true; await save(record);
@@ -211,7 +241,7 @@ export function hyprland(options: HyprlandOptions): TernProvider {
       for(const name of entries) { if(!name.startsWith('attempt-')) continue; const directory=join(root,name);await ownedDirectory(directory);let record:Record;
         try{record=JSON.parse(await readFile(join(directory,'lease.json'),'utf8')) as Record;}catch(error){if((error as NodeJS.ErrnoException).code==='ENOENT'){await rm(directory,{recursive:true});continue;}throw error;}
         const nativeRoot=options.nativeRoot??join(tmpdir(),`hp-${process.getuid?.()}`);
-        if(record.version!==1||record.runId!==request.runId||record.targetName!==request.targetName||record.directory!==directory||!/^e2e-[a-f0-9]{32}$/.test(record.output)||record.tag!==record.output||dirname(record.childRoot)!==nativeRoot||!/^s-[A-Za-z0-9]{6}$/.test(basename(record.childRoot))) throw fail('Refusing foreign containment cleanup record');
+        if(record.version!==2||record.runId!==request.runId||record.targetName!==request.targetName||record.directory!==directory||!/^e2e-[a-f0-9]{32}$/.test(record.output)||record.tag!==record.output||dirname(record.childRoot)!==nativeRoot||!/^s-[A-Za-z0-9]{6}$/.test(basename(record.childRoot))) throw fail('Refusing foreign containment cleanup record');
         await resource(options,record).close(context);
       } await rmdir(root);
     }
