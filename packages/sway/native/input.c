@@ -180,8 +180,13 @@ static int reap_exact(pid_t child, int pidfd, uint32_t timeout_ms, int *status, 
     if (stop_on_interrupt && interrupted) return 1;
     int32_t remain = (int32_t)(deadline - clock_ms());
     if (remain <= 0) return 1;
-    struct pollfd waiter = { pidfd, POLLIN, 0 };
-    if (poll(&waiter, 1, remain) < 0 && errno != EINTR) return -1;
+    if (pidfd >= 0) {
+      struct pollfd waiter = { pidfd, POLLIN, 0 };
+      if (poll(&waiter, 1, remain) < 0 && errno != EINTR) return -1;
+    } else {
+      struct timespec pause = { 0, 10000000 };
+      nanosleep(&pause, NULL);
+    }
   }
 }
 static int dispatch_owned(int argc, char **argv) {
@@ -202,31 +207,23 @@ static int dispatch_owned(int argc, char **argv) {
   }
   int status = 0;
   int pidfd = (int)syscall(SYS_pidfd_open, child, 0);
-  if (pidfd < 0) {
-    pid_t result = waitpid(child, &status, WNOHANG);
-    if (result == child) {
-      close(lock);
-      int code = child_status(status);
-      return interrupted && code == 0 ? 2 : code;
-    }
-    kill(child, SIGKILL);
-    result = waitpid(child, &status, 0);
-    close(lock);
-    if (result != child) return 2;
-    int code = child_status(status);
-    return code == 0 ? 2 : code;
-  }
   int waited = reap_exact(child, pidfd, 5000, &status, true);
-  if (waited == 0 && !interrupted) { close(pidfd); close(lock); return child_status(status); }
+  if (waited == 0 && !interrupted) {
+    if (pidfd >= 0) close(pidfd);
+    close(lock);
+    return child_status(status);
+  }
   if (waited != 0) {
-    (void)syscall(SYS_pidfd_send_signal, pidfd, SIGTERM, NULL, 0);
+    if (pidfd >= 0) (void)syscall(SYS_pidfd_send_signal, pidfd, SIGTERM, NULL, 0);
+    else kill(child, SIGTERM);
     waited = reap_exact(child, pidfd, 1000, &status, false);
     if (waited != 0) {
-      (void)syscall(SYS_pidfd_send_signal, pidfd, SIGKILL, NULL, 0);
+      if (pidfd >= 0) (void)syscall(SYS_pidfd_send_signal, pidfd, SIGKILL, NULL, 0);
+      else kill(child, SIGKILL);
       waited = reap_exact(child, pidfd, 1000, &status, false);
     }
   }
-  close(pidfd);
+  if (pidfd >= 0) close(pidfd);
   close(lock);
   if (waited == 0) {
     int code = child_status(status);
