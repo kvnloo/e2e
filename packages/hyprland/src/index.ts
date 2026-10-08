@@ -103,12 +103,15 @@ function resource(options: HyprlandOptions, record: Record) {
     if(!record.child){const scoped=clients.filter(c=>c.monitor===output.id&&c.tags.some(t=>t===record.tag||t===`${record.tag}*`));if(scoped.length===1){ownedClient(scoped[0]!,scoped[0]!.pid,record.tag,output,record.workspace,size);const candidate=await processIdentity(scoped[0]!.pid);if(!await ownedDescendant(candidate,record.host))throw fail('Tagged recovery client is outside the independently pinned compositor ancestry');record.child=candidate;await save(record);}else if(record.identityFile){try{const candidate=JSON.parse(await readFile(record.identityFile,'utf8')) as ProcessIdentity;if(await stillOwned(candidate)&&!await ownedDescendant(candidate,record.host))throw fail('Guest launch receipt is not an independently verified descendant of the pinned compositor');}catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;}}}
     const tagged = clients.filter(c=>c.tags.some(t=>t===record.tag||t===`${record.tag}*`));
     const onOutput = clients.filter(c=>c.monitor===output.id);
-    const childAlive=record.child!==undefined&&await stillOwned(record.child);
-    if (tagged.length > 1 || onOutput.some(c=>!(childAlive&&c.pid===record.child!.pid))) throw fail('Refusing output with a foreign client');
-    if (tagged.length) {
-      if (!record.child || !await ownedDescendant(record.child,record.host)) throw fail('Tagged client does not belong to the independently verified parent process generation');
-      ownedClient(tagged[0]!, record.child.pid, record.tag, output, record.workspace, size);
-    } else if (requireChild) throw fail('Owned nested client is absent');
+    const child=record.child,known=child?clients.filter(c=>c.pid===child.pid):[];
+    const childAlive=child!==undefined&&await stillOwned(child);
+    if (tagged.length > 1 || known.length > 1 || onOutput.some(c=>!(childAlive&&c.pid===child!.pid))) throw fail('Refusing output with a foreign client');
+    if (childAlive&&child) {
+      if(known.length!==1||tagged.length!==1||known[0]!==tagged[0])throw fail('Live nested generation lost mapped PID/tag containment; retain cleanup evidence');
+      if (!await ownedDescendant(child,record.host)) throw fail('Nested client does not belong to the independently verified parent process generation');
+      ownedClient(known[0]!, child.pid, record.tag, output, record.workspace, size);
+    } else if(tagged.length||known.length)throw fail('Mapped client lacks the recorded live nested generation; retain cleanup evidence');
+    else if (requireChild) throw fail('Owned nested client is absent');
     return output;
   };
   const guard = async (signal: AbortSignal) => { await verify(signal,true); const before=await proof(signal); return async()=>{ await verify(signal,true); await log('operation',before,await proof(signal)); }; };
@@ -158,6 +161,7 @@ function resource(options: HyprlandOptions, record: Record) {
     if(record.identityFile){try{await ownedDirectory(dirname(record.identityFile));const args=['close',record.identityFile];await exec(options.sway.binaries.input,options.guest?['enter-ns',String(record.host.pid),record.host.start,options.guest.nsenter,options.sway.binaries.input,...args]:args,{env:{PATH:'/usr/bin:/bin'},signal,timeout:context.timeoutMs});}catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;}}
     const monitors=await ctl.query<Monitor[]>('monitors',signal);
     if(monitors.some(m=>m.name===record.output)) await verify(signal,false);
+    else if(record.child){const child=record.child,clients=await ctl.query<Client[]>('clients',signal);if(await stillOwned(child)||clients.some(c=>c.pid===child.pid||c.tags.some(t=>t===record.tag||t===`${record.tag}*`)))throw fail('Owned output absent with live or mapped nested containment; retain cleanup evidence');}
     if(!record.child&&record.identityFile){const deadline=Date.now()+context.timeoutMs;for(;;){await verify(signal,false);if(record.child)break;let candidate:ProcessIdentity;try{candidate=JSON.parse(await readFile(record.identityFile,'utf8')) as ProcessIdentity;}catch(error){if((error as NodeJS.ErrnoException).code==='ENOENT')break;throw error;}if(!await stillOwned(candidate))break;if(!await ownedDescendant(candidate,record.host))throw fail('Refusing an unverified guest cleanup receipt');if(Date.now()>=deadline)throw fail('Published nested process never established independently verified tagged containment');await delay(25,undefined,{signal});}}
     if(lease) await provider.release(lease,context);
     await provider.sweep!({runId:record.runId,targetName:record.targetName,env:{}},context);

@@ -58,16 +58,25 @@ test('planned and staged allocation never remove a colliding foreign private dir
 test('crash after atomic publication is recovered using the already-persisted inode',async()=>{
   const f=await fixture();try{await f.save();const stage=join(f.attempt,'child-stage');await mkdir(stage,{mode:0o700});const identity=await lstat(stage);await f.save({childIdentity:{dev:identity.dev,ino:identity.ino}});await rename(stage,f.childRoot);await hyprland(f.options).sweep!(f.request,cleanup());await expect(lstat(f.childRoot)).rejects.toMatchObject({code:'ENOENT'});}finally{await f.close();}
 });
-test.each(['moved','resized','hidden','unmapped','foreign PID'])('cleanup refuses a present tagged client with changed %s containment',async(change)=>{
+test.each(['moved','resized','hidden','unmapped','foreign PID','retagged and moved','retagged and moved without owned output','missing mapped client'])('cleanup refuses a live recorded client with changed %s containment',async(change)=>{
   const f=await fixture(),child=spawn(process.execPath,['-e','process.stdin.resume()'],{stdio:['pipe','ignore','ignore']});
   try{
     await once(child,'spawn');const identity=await processIdentity(child.pid!);
     f.data.monitors.push({...f.data.monitors[0]!,id:2,name:f.record.output,focused:false,activeWorkspace:{id:3,name:'owned'}});
     const client={address:'0xowned',pid:identity.pid,monitor:2,workspace:{id:3,name:'owned'},tags:[f.record.tag],at:[0,0],size:[1280,900],mapped:true,hidden:false,xwayland:false};
-    if(change==='moved'){client.monitor=1;client.workspace={id:1,name:'1'};}else if(change==='resized')client.size=[1279,900];else if(change==='hidden')client.hidden=true;else if(change==='unmapped')client.mapped=false;else client.pid=process.pid;
-    await writeFile(f.stateFile,JSON.stringify({...f.data,clients:[client]}));await f.save({outputRequested:true,outputId:2,workspaceId:3,workspaceOriginalName:'3',workspaceRenamed:true,child:identity});
+    if(change==='moved'||change.startsWith('retagged and moved')){client.monitor=1;client.workspace={id:1,name:'1'};if(change.startsWith('retagged and moved'))client.tags=[];if(change==='retagged and moved without owned output')f.data.monitors.pop();}else if(change==='resized')client.size=[1279,900];else if(change==='hidden')client.hidden=true;else if(change==='unmapped')client.mapped=false;else if(change==='foreign PID')client.pid=process.pid;
+    await writeFile(f.stateFile,JSON.stringify({...f.data,clients:change==='missing mapped client'?[]:[client]}));await f.save({outputRequested:true,outputId:2,workspaceId:3,workspaceOriginalName:'3',workspaceRenamed:true,child:identity});
     await expect(hyprland(f.options).sweep!(f.request,cleanup())).rejects.toThrow(/containment|foreign client/);
-    expect(await stillOwned(identity)).toBe(true);expect(await readFile(join(f.attempt,'lease.json'),'utf8')).toContain(String(identity.pid));expect(JSON.parse(await readFile(f.stateFile,'utf8')).monitors).toHaveLength(2);
+    expect(await stillOwned(identity)).toBe(true);expect(await readFile(join(f.attempt,'lease.json'),'utf8')).toContain(String(identity.pid));expect(JSON.parse(await readFile(f.stateFile,'utf8')).monitors).toHaveLength(change==='retagged and moved without owned output'?1:2);
+  }finally{if(child.exitCode===null&&child.signalCode===null){const exited=once(child,'exit');child.kill('SIGTERM');await exited;}await f.close();}
+});
+test('cleanup permits an independently exited generation with no mapped client',async()=>{
+  const f=await fixture(),child=spawn(process.execPath,['-e','process.stdin.resume()'],{stdio:['pipe','ignore','ignore']});
+  try{
+    await once(child,'spawn');const identity=await processIdentity(child.pid!);const exited=once(child,'exit');child.kill('SIGTERM');await exited;expect(await stillOwned(identity)).toBe(false);
+    f.data.monitors.push({...f.data.monitors[0]!,id:2,name:f.record.output,focused:false,activeWorkspace:{id:3,name:'owned'}});
+    await writeFile(f.stateFile,JSON.stringify({...f.data,clients:[]}));await f.save({outputRequested:true,outputId:2,workspaceId:3,workspaceOriginalName:'3',workspaceRenamed:true,child:identity});
+    await hyprland(f.options).sweep!(f.request,cleanup());await expect(readFile(join(f.attempt,'lease.json'))).rejects.toMatchObject({code:'ENOENT'});
   }finally{if(child.exitCode===null&&child.signalCode===null){const exited=once(child,'exit');child.kill('SIGTERM');await exited;}await f.close();}
 });
 test.each(['before parent endpoint save','after parent endpoint save','potential private dispatch'])('public pending launch recovery: %s',async(cut)=>{
