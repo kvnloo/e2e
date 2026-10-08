@@ -3,11 +3,10 @@ import {
   ConfigurationError, defineEngine, EngineError, parseKey, resolveExpression,
   type EngineHandle, type EngineInitInfo, type EngineCleanupContext, type OperationContext, type NodeRef, type LocatorAction,
 } from 'e2e/engine';
-import { control, capture } from './control.ts';
+import { control, capture, requireNativeState } from './control.ts';
 import { actionSelector, flatten, focusedEditable, semanticTree, type NativeAx, type NativeDump, type NativeElement } from './tree.ts';
 import type { TernLease, TernProvider, TernRequest } from './provider.ts';
 import { withinOperation } from './operation.ts';
-import { requireNativeGate } from './gate.ts';
 export { requireNativeGate } from './gate.ts';
 export { attachedTern } from './provider.ts';
 export type { TernInput, TernLease, TernProvider, TernRequest } from './provider.ts';
@@ -43,13 +42,7 @@ export function ternEngine({ provider }: TernOptions): EngineHandle {
       return { root: { ref: { id: 'root', revision: '' }, role: 'window', children: nodes }, viewport: { width: 80, height: 24 }, truncated: true, dump: [] as NativeDump[] };
     }
     const state = await control(current, 'state', context);
-    requireNativeGate(state);
-    const panes = state.panes as { id: number }[] | undefined;
-    const focused = state.focused as { id?: number } | undefined;
-    // A window-wide tree cannot safely address a sibling pane without a native scope identity.
-    if (!Array.isArray(panes) || panes.length !== 1 || String(panes[0]?.id) !== current.pane || String(focused?.id) !== current.pane) {
-      throw new EngineError('NOT_ACTIONABLE', 'Native Tern requires its explicitly leased, focused single-pane window', { retryable: false });
-    }
+    requireNativeState(state,current.pane);
     const ax = await control(current, 'a11y', context) as unknown as NativeAx;
     const tree = await control(current, 'tree', context);
     const dumped = await control(current, 'dump *', context);
@@ -59,7 +52,7 @@ export function ternEngine({ provider }: TernOptions): EngineHandle {
       throw new EngineError('ENGINE_FAILURE', 'Native Tern returned an incomplete semantic snapshot', { retryable: false });
     }
     const dump = dumped.elements as NativeDump[];
-    requireNativeGate(await control(current,'state',context));
+    requireNativeState(await control(current,'state',context),current.pane);
     return { root: semanticTree(ax, tree.tree as NativeElement[], dump, viewport), viewport, truncated: false, dump };
   };
   const target = async (id: string, context: OperationContext, scroll = false) => {
@@ -71,12 +64,13 @@ export function ternEngine({ provider }: TernOptions): EngineHandle {
   const sendKey = async (key: string, context: OperationContext): Promise<void> => {
     const current = requireLease();
     await snapshot(context);
-    requireNativeGate(await control(current,'state',context));
+    requireNativeState(await control(current,'state',context),current.pane);
     void context.timeoutMs;
     if (current.input) {
-      try { await current.input.press(key, context.signal); }
-      catch { throw new EngineError('ACTION_MAY_HAVE_COMMITTED', 'Compositor key delivery is uncertain', { retryable: false }); }
-      requireNativeGate(await control(current,'state',context));
+      try {
+        await current.input.press(key, context.signal);
+        requireNativeState(await control(current,'state',context),current.pane);
+      } catch { throw new EngineError('ACTION_MAY_HAVE_COMMITTED', 'Compositor key delivery is uncertain', { retryable: false }); }
       return;
     }
     const parsed = parseKey(key);
@@ -95,12 +89,13 @@ export function ternEngine({ provider }: TernOptions): EngineHandle {
     if (replace) await control(current, `a11y set-value ${JSON.stringify(field.selector)} ""`, context, true);
     await editable(context,intendedId??field.node.ref.id);
     context.signal.throwIfAborted();
+    requireNativeState(await control(current,'state',context),current.pane);
     void context.timeoutMs;
-    requireNativeGate(await control(current,'state',context));
     if (current.input) {
-      try { await current.input.type(text, context.signal); }
-      catch { throw new EngineError('ACTION_MAY_HAVE_COMMITTED', 'Compositor text delivery is uncertain', { retryable: false }); }
-      requireNativeGate(await control(current,'state',context));
+      try {
+        await current.input.type(text, context.signal);
+        requireNativeState(await control(current,'state',context),current.pane);
+      } catch { throw new EngineError('ACTION_MAY_HAVE_COMMITTED', 'Compositor text delivery is uncertain', { retryable: false }); }
     } else await control(current, `type ${JSON.stringify(text)}`, context, true);
   };
   return defineEngine({
