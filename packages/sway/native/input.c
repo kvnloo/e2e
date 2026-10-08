@@ -178,6 +178,19 @@ static int child_status(int status) {
   if (WIFSIGNALED(status)) return 128 + WTERMSIG(status);
   return 2;
 }
+static int reap_exact(pid_t child, int pidfd, uint32_t timeout_ms, int *status, bool stop_on_interrupt) {
+  uint32_t deadline = clock_ms() + timeout_ms;
+  for (;;) {
+    pid_t result = waitpid(child, status, WNOHANG);
+    if (result == child) return 0;
+    if (result < 0 && errno != EINTR) return -1;
+    if (stop_on_interrupt && interrupted) return 1;
+    int32_t remain = (int32_t)(deadline - clock_ms());
+    if (remain <= 0) return 1;
+    struct pollfd waiter = { pidfd, POLLIN, 0 };
+    if (poll(&waiter, 1, remain) < 0 && errno != EINTR) return -1;
+  }
+}
 static int dispatch_owned(int argc, char **argv) {
   if (argc < 4 || argv[2][0] != '/' || argv[3][0] != '/') return 2;
   int lock = lifecycle_lock(argv[2], false);
@@ -194,21 +207,39 @@ static int dispatch_owned(int argc, char **argv) {
     execv(argv[3], &argv[3]);
     _exit(127);
   }
-  uint32_t deadline = clock_ms() + 5000;
-  for (;;) {
-    int status = 0;
+  int status = 0;
+  int pidfd = (int)syscall(SYS_pidfd_open, child, 0);
+  if (pidfd < 0) {
     pid_t result = waitpid(child, &status, WNOHANG);
-    if (result == child) { close(lock); return child_status(status); }
-    if (result < 0 && errno != EINTR) { close(lock); return 2; }
-    if (interrupted || (int32_t)(clock_ms() - deadline) >= 0) {
-      result = waitpid(child, &status, WNOHANG);
-      if (result == child) { close(lock); return child_status(status); }
+    if (result == child) {
       close(lock);
-      return 2;
+      int code = child_status(status);
+      return interrupted && code == 0 ? 2 : code;
     }
-    struct timespec pause = { 0, 10000000 };
-    nanosleep(&pause, NULL);
+    kill(child, SIGKILL);
+    result = waitpid(child, &status, 0);
+    close(lock);
+    if (result != child) return 2;
+    int code = child_status(status);
+    return code == 0 ? 2 : code;
   }
+  int waited = reap_exact(child, pidfd, 5000, &status, true);
+  if (waited == 0 && !interrupted) { close(pidfd); close(lock); return child_status(status); }
+  if (waited != 0) {
+    (void)syscall(SYS_pidfd_send_signal, pidfd, SIGTERM, NULL, 0);
+    waited = reap_exact(child, pidfd, 1000, &status, false);
+    if (waited != 0) {
+      (void)syscall(SYS_pidfd_send_signal, pidfd, SIGKILL, NULL, 0);
+      waited = reap_exact(child, pidfd, 1000, &status, false);
+    }
+  }
+  close(pidfd);
+  close(lock);
+  if (waited == 0) {
+    int code = child_status(status);
+    return code == 0 ? 2 : code;
+  }
+  return 2;
 }
 static int open_beneath_parent(const char *path, char *name, size_t name_size) {
   if (!path || path[0] != '/' || strlen(path) >= 4096) return -1;

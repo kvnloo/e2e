@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import {execFile} from 'node:child_process';
+import {execFile,spawn} from 'node:child_process';
 import {promisify} from 'node:util';
 import {test} from 'node:test';
 import {mkdtemp,mkdir,lstat,symlink,rm,writeFile,readFile,chmod} from 'node:fs/promises';
@@ -39,6 +39,26 @@ test('open dispatch-owned publishes a private receipt and preserves actual child
   await chmod(directory,0o770);
   await assert.rejects(exec(binary,['dispatch-owned',join(directory,'other.json'),process.execPath,'-e','']),{code:2});
  }finally{await rm(directory,{recursive:true});}
+});
+test('timed-out dispatch-owned reaps the exact delayed child and writes no effect',async()=>{
+ const directory=await mkdtemp('/tmp/e2e-authority-');
+ const sentinel=spawn(process.execPath,['-e','process.stdin.resume()'],{stdio:['pipe','ignore','ignore']});
+ try{
+  assert(sentinel.pid&&sentinel.pid>0);
+  const receipt=join(directory,'dispatch.json'),identity=join(directory,'child.json'),effect=join(directory,'effect'),writer=join(directory,'writer.mjs');
+  // Real child delay: fake timers cannot reach the exec'd Node; the helper bound must win before the write.
+  await writeFile(writer,`import {writeFileSync} from 'node:fs'; writeFileSync(process.argv[1],JSON.stringify({pid:process.pid})); await new Promise(resolve=>setTimeout(resolve,30000)); writeFileSync(process.argv[2],'launched');\n`,{mode:0o700});
+  const failure=await exec(binary,['dispatch-owned',receipt,process.execPath,writer,identity,effect],{timeout:1000}).then(()=>undefined,error=>error as NodeJS.ErrnoException&{stdout?:string});
+  assert(failure);
+  assert.notEqual(failure.code,0);
+  await assert.rejects(lstat(effect),{code:'ENOENT'});
+  const published=JSON.parse(await readFile(receipt,'utf8')) as {pid:number;start:string};
+  assert(Number.isSafeInteger(published.pid)&&published.pid>0);
+  const child=JSON.parse(await readFile(identity,'utf8')) as {pid:number};
+  assert(Number.isSafeInteger(child.pid)&&child.pid>0&&child.pid!==sentinel.pid);
+  await assert.rejects(()=>{process.kill(child.pid,0);},{code:'ESRCH'});
+  process.kill(sentinel.pid,0);
+ }finally{sentinel.kill('SIGKILL');await rm(directory,{recursive:true});}
 });
 test('claim-root moves a pinned inode and refuses symlink source ancestors or foreign destinations',async()=>{
  const directory=await mkdtemp('/tmp/e2e-authority-');try{
