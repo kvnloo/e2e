@@ -151,16 +151,6 @@ static int publish_root(const char *source,const char *destination,const char *f
   int result=(int)syscall(SYS_renameat2,AT_FDCWD,source,dir,name,RENAME_NOREPLACE);close(dir);
   if(lock>=0)close(lock);return result<0?2:0;
 }
-static int mkdir_root(const char *destination) {
-  char parent[4096];if(strlen(destination)>=sizeof parent||destination[0]!='/')return 2;strcpy(parent,destination);
-  char *name=strrchr(parent,'/');if(!name||name==parent)return 2;*name++=0;
-  int slash=open("/",O_RDONLY|O_DIRECTORY|O_CLOEXEC);if(slash<0)return 2;
-  struct open_how how={.flags=O_RDONLY|O_DIRECTORY|O_CLOEXEC,.resolve=RESOLVE_BENEATH|RESOLVE_NO_SYMLINKS};
-  int dir=(int)syscall(SYS_openat2,slash,parent+1,&how,sizeof how);close(slash);if(dir<0)return 2;
-  int result=mkdirat(dir,name,0700);if(result<0&&errno!=EEXIST){close(dir);return 2;}
-  int child=openat(dir,name,O_RDONLY|O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC);close(dir);if(child<0)return 2;
-  struct stat info;result=fstat(child,&info);close(child);return result<0||info.st_uid!=getuid()||(info.st_mode&077)?2:0;
-}
 static int record_identity(const char *path) {
   char stat_path[64], stat_text[4096]; snprintf(stat_path, sizeof stat_path, "/proc/%ld/stat", (long)getpid());
   FILE *stat_file = fopen(stat_path, "r"); if (!stat_file || !fgets(stat_text, sizeof stat_text, stat_file)) return 2; fclose(stat_file);
@@ -546,7 +536,6 @@ int main(int argc, char **argv) {
   if(argc>1&&!strcmp(argv[1],"enter-ns"))return enter_namespaces(argc,argv,2);
   if(argc==4&&!strcmp(argv[1],"publish-root"))return publish_root(argv[2],argv[3],NULL);
   if(argc==5&&!strcmp(argv[1],"publish-root"))return publish_root(argv[2],argv[3],argv[4]);
-  if(argc==3&&!strcmp(argv[1],"mkdir-root"))return mkdir_root(argv[2]);
   if(argc==3&&strcmp(argv[1],"close")==0){int lock=lifecycle_lock(argv[2],true);if(lock<0)return 2;close(lock);return 0;}
   if (argc == 4 && strcmp(argv[1], "stop") == 0) return stop_owned(argv[2], argv[3]);
   if (argc >= 4 && !strcmp(argv[1], "dispatch-owned")) return dispatch_owned(argc, argv);
