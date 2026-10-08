@@ -8,7 +8,7 @@ Default native modifier delivery is refused. Select a provider with a real isola
 
 `apps/tern-testbed` is a real SDK fixture with inert controls. Its unit tests complement, not replace, the required real native CI job. The SDK is public; native Tern delivery is currently closed beta. A permitted reproducible pinned executable is a prerequisite, not a mockable test detail. No workstation paths, profiles, private binaries or histories belong in a contribution.
 
-Native Tern 0.6 must explicitly report `state.gate.applies === false` before and after app observation/input/capture. Active or unknown vendor gates are a hard stop, even if AX exposes underlying controls. A vendor-supported licensed/preprovisioned isolated test profile is a separate prerequisite from executable delivery. Never automate sign-in/account actions, copy live host credentials or use underlying AX to bypass a covering gate. Fresh empty provider profiles may remain blocked until that prerequisite is supplied.
+Before and after app observation/input/capture, require gate phase `off`, null error, and either `applies === false` or native 0.6.1 beta `applies === true && signed_in === true`. Applicability alone is not an active gate. Unknown, active or applicable signed-out states fail closed even if AX exposes underlying controls. Never automate account actions, copy live host credentials or bypass a covering gate through AX; actual signed-in/off private-window readback is not a missing-user-access/license prerequisite.
 
 ## Owned Linux input
 
