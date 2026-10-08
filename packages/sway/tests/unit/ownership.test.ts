@@ -6,5 +6,6 @@ test('kernel ancestry accepts the real child but refuses a forged generation and
   const child=spawn(process.execPath,['-e','process.stdin.resume()'],{stdio:['pipe','ignore','ignore']});
   try{await once(child,'spawn');const identity=await processIdentity(child.pid!),root=await processIdentity(process.pid);
     expect(await ownedDescendant(identity,root)).toBe(true);expect(await ownedDescendant({...identity,start:'0'},root)).toBe(false);expect(await ownedDescendant(root,identity)).toBe(false);
+    expect(await ownedDescendant(root,root)).toBe(false);
   }finally{const exited=once(child,'exit');child.kill('SIGTERM');await exited;}
 });

@@ -8,6 +8,7 @@ import { tmpdir } from 'node:os';
 import { setTimeout as delay } from 'node:timers/promises';
 import { ConfigurationError, EngineError, parseKey, type EngineCleanupContext } from 'e2e/engine';
 import type { TernLease, TernProvider, TernRequest } from '@e2e-dev/tern';
+import { requireNativeGate } from '@e2e-dev/tern';
 import { processIdentity, stillOwned, ownedDirectory, childPids, type ProcessIdentity } from './ownership.ts';
 export { processIdentity, stillOwned, ownedDirectory, ownedDescendant, type ProcessIdentity } from './ownership.ts';
 const exec = promisify(execFile);
@@ -252,6 +253,7 @@ export function sway(options: SwayOptions): TernProvider {
       displays.set(display.id, display);
       try {
         const control = join(display.directory, 'control.sock');
+        const checkGate=async(signal:AbortSignal)=>{signal.throwIfAborted();const result=await exec(options.binaries.tern,['ctl','--control',control,'state'],{env:display.env,signal,timeout:5000,maxBuffer:8*1024*1024});const gateState=JSON.parse(result.stdout) as Record<string,unknown>;if(gateState.ok!==true)throw new EngineError('ENGINE_FAILURE','Native gate inspection failed',{retryable:false});requireNativeGate(gateState);};
         const supervisor = await display.spawn(options.binaries.tern, ['--control', control], request.signal);
         const deadline = Date.now() + 15000;
         let state: { ok: boolean; panes: unknown[]; focused: { id: string } } | undefined;
@@ -262,11 +264,12 @@ export function sway(options: SwayOptions): TernProvider {
           catch { await delay(50, undefined, { signal: request.signal }); }
         }
         if (!state.ok || state.panes.length !== 1 || !['number', 'string'].includes(typeof state.focused?.id)) throw new EngineError('NOT_ACTIONABLE', 'Owned Tern must expose exactly one native pane', { retryable: false });
+        requireNativeGate(state as unknown as Record<string,unknown>);
         const descendants = await childPids(supervisor.pid);
         for (let index = 0; index < descendants.length; index++) descendants.push(...await childPids(descendants[index]!));
         let focused = false;
         for (const pid of descendants) {
-          try { await display.focusClient(pid, request.signal); focused = true; break; }
+          try {await checkGate(request.signal);await display.focusClient(pid,request.signal);await checkGate(request.signal);focused=true;break;}
           catch (error) { if (!(error instanceof EngineError) || error.code !== 'NODE_STALE') throw error; }
         }
         if (!focused) throw new EngineError('NOT_ACTIONABLE', 'Owned Tern native client is not a supervisor child', { retryable: false });
@@ -275,21 +278,30 @@ export function sway(options: SwayOptions): TernProvider {
           const ready = await exec(options.binaries.tern, ['ctl', '--control', control, 'ready'], { env: display.env, signal: request.signal, timeout: 25000 });
           if (!(JSON.parse(ready.stdout) as { ok?: boolean }).ok) throw new Error('Shell not ready');
         } catch { throw new EngineError('ENGINE_FAILURE', 'Owned native shell did not become ready', { retryable: false }); }
+        await checkGate(request.signal);
         const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
         const command = [resolve(request.projectRoot, request.app.appPath), ...request.app.launchArguments ?? []].map(quote).join(' ');
         try {
           const result = await exec(options.binaries.tern, ['ctl', '--control', control, `run ${JSON.stringify(command)}`], { env: display.env, signal: request.signal, timeout: 25000 });
           if (!(JSON.parse(result.stdout) as { ok?: boolean }).ok) throw new Error('Launch not acknowledged');
         } catch { throw new EngineError('ACTION_MAY_HAVE_COMMITTED', 'Owned app launch did not settle', { retryable: false }); }
+        await checkGate(request.signal);
         if (!display.nativeClient) throw new EngineError('INVALID_STATE', 'Owned native client identity was not established', { retryable: false });
         await mkdir(request.artifactsDir, { recursive: true, mode: 0o700 });
         await writeFile(join(request.artifactsDir, 'native-client.json'), JSON.stringify({ client: display.nativeClient, seat: display.seat, output: display.output, lease: display.id }), { mode: 0o600 });
-        return { id: display.id, pane: String(state.focused.id), mode: 'native', control, binary: options.binaries.tern, env: display.env, client: display.nativeClient, capture: display.capture, guard: async signal => {
-          const client=display.nativeClient;
-          if(!client||!await stillOwned(client)) throw new EngineError('NOT_ACTIONABLE','Owned native client generation changed',{retryable:false});
-          const after=await options.parent?.guard?.(signal);
-          return async()=>{ if(!await stillOwned(client)) throw new EngineError('ACTION_MAY_HAVE_COMMITTED','Owned native client exited across the operation',{retryable:false}); await after?.(); };
-        }, input: { type: display.type, press: display.press, tap: display.tap } } satisfies TernLease;
+        const guard=async(signal:AbortSignal)=>{
+          await checkGate(signal);const client=display.nativeClient;
+          if(!client||!await stillOwned(client))throw new EngineError('NOT_ACTIONABLE','Owned native client generation changed',{retryable:false});
+          const after=await options.parent?.guard?.(signal);await checkGate(signal);
+          return async()=>{if(!await stillOwned(client))throw new EngineError('ACTION_MAY_HAVE_COMMITTED','Owned native client exited across the operation',{retryable:false});await checkGate(signal);await after?.();};
+        };
+        const guarded=async<T>(signal:AbortSignal,operation:()=>Promise<T>)=>{const after=await guard(signal);try{return await operation();}finally{await after();}};
+        return{id:display.id,pane:String(state.focused.id),mode:'native',control,binary:options.binaries.tern,env:display.env,client:display.nativeClient,
+          capture:signal=>guarded(signal,()=>display.capture(signal)),guard,input:{
+            type:(text,signal)=>guarded(signal,()=>display.type(text,signal)),
+            press:(key,signal)=>guarded(signal,()=>display.press(key,signal)),
+            tap:(x,y,signal)=>guarded(signal,()=>display.tap(x,y,signal)),
+          }} satisfies TernLease;
       } catch (error) { await display.release({ signal: AbortSignal.timeout(15000), timeoutMs: 15000 } as EngineCleanupContext); displays.delete(display.id); throw error; }
     },
     async release(lease, context) { const display = displays.get(lease.id); if (!display) return; await display.release(context); displays.delete(lease.id); },
