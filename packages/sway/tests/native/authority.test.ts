@@ -9,6 +9,32 @@ assert(binary?.startsWith('/'),'explicit compiled E2E_INPUT_BINARY is required; 
 test('atomic publication preserves an existing foreign directory and the owned stage',async()=>{
  const directory=await mkdtemp('/tmp/e2e-authority-');try{const stage=join(directory,'stage'),foreign=join(directory,'foreign');await mkdir(stage,{mode:0o700});await mkdir(foreign,{mode:0o700});const before=await lstat(foreign);await assert.rejects(exec(binary,['publish-root',stage,foreign]),{code:2});const after=await lstat(foreign);assert.equal(after.dev,before.dev);assert.equal(after.ino,before.ino);assert((await lstat(stage)).isDirectory());}finally{await rm(directory,{recursive:true});}
 });
+test('closed private fence rejects publish-root and argc4 still publishes',async()=>{
+ const directory=await mkdtemp('/tmp/e2e-authority-');try{
+  const stage=join(directory,'stage'),dest=join(directory,'dest'),fence=join(directory,'group.json'),late=join(directory,'late'),lateDest=join(directory,'late-dest');
+  await mkdir(stage,{mode:0o700});const before=await lstat(stage);
+  await exec(binary,['close',fence]);
+  await assert.rejects(exec(binary,['publish-root',stage,dest,fence]),{code:2});
+  assert.equal((await lstat(stage)).ino,before.ino);await assert.rejects(lstat(dest),{code:'ENOENT'});
+  await exec(binary,['publish-root',stage,dest]);
+  assert.equal((await lstat(dest)).ino,before.ino);
+  await mkdir(late,{mode:0o700});
+  await assert.rejects(exec(binary,['publish-root',late,lateDest,fence]),{code:2});
+  await assert.rejects(lstat(lateDest),{code:'ENOENT'});assert((await lstat(late)).isDirectory());
+ }finally{await rm(directory,{recursive:true});}
+});
+test('open private fence publishes under lock then close blocks a later helper',async()=>{
+ const directory=await mkdtemp('/tmp/e2e-authority-');try{
+  const stage=join(directory,'stage'),dest=join(directory,'dest'),fence=join(directory,'group.json');
+  await mkdir(stage,{mode:0o700});const before=await lstat(stage);
+  await exec(binary,['publish-root',stage,dest,fence]);
+  assert.equal((await lstat(dest)).ino,before.ino);await assert.rejects(lstat(stage),{code:'ENOENT'});
+  await exec(binary,['close',fence]);
+  const second=join(directory,'second');await mkdir(second,{mode:0o700});
+  await assert.rejects(exec(binary,['publish-root',second,join(directory,'second-dest'),fence]),{code:2});
+  await assert.rejects(lstat(join(directory,'second-dest')),{code:'ENOENT'});
+ }finally{await rm(directory,{recursive:true});}
+});
 test('guest-planted ancestor symlink cannot redirect host publication or directory creation',async()=>{
  const directory=await mkdtemp('/tmp/e2e-authority-');try{const stage=join(directory,'stage'),sentinel=join(directory,'sentinel'),alias=join(directory,'alias');await mkdir(stage,{mode:0o700});await mkdir(sentinel,{mode:0o700});await symlink(sentinel,alias);await assert.rejects(exec(binary,['publish-root',stage,join(alias,'victim')]),{code:2});await assert.rejects(exec(binary,['mkdir-root',join(alias,'victim')]),{code:2});await assert.rejects(lstat(join(sentinel,'victim')),{code:'ENOENT'});}finally{await rm(directory,{recursive:true});}
 });
