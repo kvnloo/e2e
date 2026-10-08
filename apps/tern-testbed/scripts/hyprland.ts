@@ -39,7 +39,7 @@ try {
   const privateReal=await realpath(privateDirectory);for(const path of guestWrites){const exposed=await realpath(path);assert(privateReal!==exposed&&!privateReal.startsWith(exposed+sep),'no guest-writable ancestor or symlink reaches host journals');}
   const args=['--die-with-parent','--unshare-user','--unshare-ipc','--unshare-net','--unshare-uts','--uid',String(process.getuid!()),'--gid',String(process.getgid!()),'--cap-drop','ALL','--ro-bind','/usr','/usr','--ro-bind','/proc','/proc','--ro-bind','/sys','/sys','--dev','/dev','--tmpfs','/run','--tmpfs','/tmp','--tmpfs','/etc','--dir',directory,'--ro-bind',config,config,'--dev-bind',render,render];
   for(const path of guestWrites)args.push('--bind',path,path);
-  for(const path of ['/bin','/lib','/lib64']){try{const stat=await lstat(path);args.push(...stat.isSymbolicLink()?['--symlink',await readlink(path),path]:['--ro-bind',path,path]);}catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;}}
+  for(const path of ['/bin','/lib','/lib64']){try{const linkStat=await lstat(path);args.push(...linkStat.isSymbolicLink()?['--symlink',await readlink(path),path]:['--ro-bind',path,path]);}catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;}}
   for(const path of ['/etc/ld.so.cache','/etc/fonts']){try{await access(path);args.push('--ro-bind',path,path);}catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;}}
   const parentSocket=join(outer.env.XDG_RUNTIME_DIR!,outer.env.WAYLAND_DISPLAY!),guestParentSocket=join(runtime,'outer-wayland');
   args.push('--ro-bind',parentSocket,guestParentSocket,'--ro-bind',configurationRoot,configurationRoot);
