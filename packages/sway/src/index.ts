@@ -2,8 +2,8 @@ import { createHash, randomUUID } from 'node:crypto';
 import { spawn, execFile, type ChildProcess } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createConnection } from 'node:net';
-import { mkdir, mkdtemp, writeFile, readFile, readdir, rename, lstat, rm, rmdir } from 'node:fs/promises';
-import { basename, dirname, join, resolve, isAbsolute } from 'node:path';
+import { mkdir, mkdtemp, writeFile, readFile, readdir, rename, lstat, realpath, link, rm, rmdir } from 'node:fs/promises';
+import { basename, dirname, join, resolve, isAbsolute, sep } from 'node:path';
 import { tmpdir } from 'node:os';
 import { setTimeout as delay } from 'node:timers/promises';
 import { ConfigurationError, EngineError, parseKey, type EngineCleanupContext } from 'e2e/engine';
@@ -13,6 +13,7 @@ import { processIdentity, stillOwned, ownedDirectory, childPids, type ProcessIde
 export { processIdentity, stillOwned, ownedDirectory, ownedDescendant, type ProcessIdentity } from './ownership.ts';
 const exec = promisify(execFile);
 
+export type ParentLaunchRecovery = {readonly kind:'PROCESS';readonly identity:ProcessIdentity}|{readonly kind:'NEVER_LAUNCHED'}|{readonly kind:'UNKNOWN'};
 export interface OwnedWaylandParent {
   readonly runtimeDir: string;
   readonly waylandDisplay: string;
@@ -20,7 +21,8 @@ export interface OwnedWaylandParent {
   readonly guest?:{readonly target:ProcessIdentity;readonly nsenter:string};
   /** The parent owns silent placement policy; no uncontained direct host spawn. */
   launch(binary: string, args: readonly string[], env: Readonly<Record<string, string>>, identityFile: string, signal: AbortSignal): Promise<ProcessIdentity>;
-  recover?(identityFile:string,signal:AbortSignal):Promise<ProcessIdentity|undefined>;
+  /** NEVER_LAUNCHED requires a closed host-private dispatch fence, not a missing guest receipt. */
+  recover?(identityFile:string,signal:AbortSignal):Promise<ParentLaunchRecovery>;
   guard?(signal: AbortSignal): Promise<() => Promise<void>>;
 }
 export interface SwayOptions {
@@ -51,15 +53,71 @@ export interface SwayDisplay {
   capture(signal: AbortSignal): Promise<Buffer>;
   release(context: EngineCleanupContext): Promise<void>;
 }
-interface LeaseRecord { version: 1; runId: string; targetName: string; directory: string; journalDirectory: string; processes: ProcessIdentity[]; parentPending?:string; configPath?:string; runtimeIdentity?:{dev:number;ino:number} }
+interface LeaseRecord { version: 2; runId: string; targetName: string; directory: string; journalDirectory: string; processes: ProcessIdentity[]; parentPending?:string; configPath?:string; runtimeIdentity?:{dev:number;ino:number} }
+interface RuntimeRootRecord {version:1;runId:string;targetName:string;directory:string;stage:string;dev:number;ino:number}
 interface Container { id: number; pid?: number | null; rect: { x: number; y: number; width: number; height: number }; nodes?: Container[]; floating_nodes?: Container[] }
 interface Seat { name: string; focus: number }
 const keyNames: Readonly<Record<string, string>> = { Enter: 'Return', Escape: 'Escape', Tab: 'Tab', Backspace: 'BackSpace', Delete: 'Delete', Insert: 'Insert', Space: 'space', ArrowUp: 'Up', ArrowDown: 'Down', ArrowLeft: 'Left', ArrowRight: 'Right', Home: 'Home', End: 'End', PageUp: 'Prior', PageDown: 'Next', F1: 'F1', F2: 'F2', F3: 'F3', F4: 'F4', F5: 'F5', F6: 'F6', F7: 'F7', F8: 'F8', F9: 'F9', F10: 'F10', F11: 'F11', F12: 'F12' };
 const modifiers: Readonly<Record<string, number>> = { Shift: 1, Control: 2, ControlOrMeta: 2, Alt: 4, Meta: 8 };
-const runDirectory = (options: SwayOptions, runId: string, targetName: string): string => join(options.root ?? join(tmpdir(), `e2e-sway-${process.getuid?.()}`), createHash('sha256').update(runId).update('\0').update(targetName).digest('hex').slice(0, 24));
-const journalRunDirectory=(options:SwayOptions,runId:string,target:string)=>runDirectory({...options,root:options.journalRoot??options.root},runId,target);
+const runtimePrefix=(options:SwayOptions)=>resolve(options.root??join(tmpdir(),`e2e-sway-${process.getuid?.()}`));
+const journalPrefix=(options:SwayOptions)=>resolve(options.journalRoot??`${runtimePrefix(options)}-j`);
+const scopeHash=(runId:string,target:string)=>createHash('sha256').update(runId).update('\0').update(target).digest('hex').slice(0,24);
+const runDirectory=(options:SwayOptions,runId:string,target:string)=>join(runtimePrefix(options),scopeHash(runId,target));
+const journalRunDirectory=(options:SwayOptions,runId:string,target:string)=>join(journalPrefix(options),scopeHash(runId,target));
+async function canonicalPrefix(path:string):Promise<string>{const suffix:string[]=[];for(;;){try{return join(await realpath(path),...suffix);}catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;suffix.unshift(basename(path));path=dirname(path);}}}
+async function journalBoundary(options:SwayOptions):Promise<void>{
+  if((options.root!==undefined&&!isAbsolute(options.root))||(options.journalRoot!==undefined&&!isAbsolute(options.journalRoot)))throw new ConfigurationError('INVALID_CONFIG','Runtime and journal prefixes must be absolute');
+  const runtime=runtimePrefix(options),journal=journalPrefix(options);
+  if(journal===runtime||journal.startsWith(runtime+sep))throw new ConfigurationError('INVALID_CONFIG','Cleanup journals must be separate from runtime writes');
+  const actualRuntime=await canonicalPrefix(runtime),actualJournal=await canonicalPrefix(journal);
+  if(actualJournal===actualRuntime||actualJournal.startsWith(actualRuntime+sep))throw new ConfigurationError('INVALID_CONFIG','Cleanup journals resolve beneath runtime writes');
+}
+async function directoryInfo(path:string){try{return await lstat(path);}catch(error){if((error as NodeJS.ErrnoException).code==='ENOENT')return undefined;throw error;}}
+const sameDirectory=(info:Awaited<ReturnType<typeof directoryInfo>>,identity:{dev:number;ino:number})=>info?.isDirectory()===true&&info.dev===identity.dev&&info.ino===identity.ino&&info.uid===process.getuid?.()&&(info.mode&0o077)===0;
+async function rootRecord(journal:string,runtime:string,runId:string,target:string):Promise<RuntimeRootRecord|undefined>{
+  let record:RuntimeRootRecord;try{record=JSON.parse(await readFile(join(journal,'runtime-root.json'),'utf8')) as RuntimeRootRecord;}catch(error){if((error as NodeJS.ErrnoException).code==='ENOENT')return undefined;throw error;}
+  if(record.version!==1||record.runId!==runId||record.targetName!==target||record.directory!==runtime||dirname(record.stage)!==journal||!/^run-stage-[A-Za-z0-9]{6}$/.test(basename(record.stage)))throw new EngineError('INVALID_STATE','Unowned runtime-root allocation record',{retryable:false});
+  return record;
+}
+async function prepareRuntimeRoot(options:SwayOptions,request:TernRequest,journal:string,runtime:string):Promise<void>{
+  let record=await rootRecord(journal,runtime,request.runId,request.targetName);
+  if(!record){
+    const stage=await mkdtemp(join(journal,'run-stage-')),info=await lstat(stage),proposal=join(journal,`root-proposal-${randomUUID()}.json`);
+    const candidate:RuntimeRootRecord={version:1,runId:request.runId,targetName:request.targetName,directory:runtime,stage,dev:info.dev,ino:info.ino};
+    await writeFile(proposal,JSON.stringify(candidate),{mode:0o600,flag:'wx'});
+    try{await link(proposal,join(journal,'runtime-root.json'));record=candidate;}catch(error){if((error as NodeJS.ErrnoException).code!=='EEXIST')throw error;await rm(stage,{recursive:true});record=await rootRecord(journal,runtime,request.runId,request.targetName);}finally{await rm(proposal,{force:true});}
+  }
+  if(!record)throw new EngineError('INVALID_STATE','Runtime-root allocation lost private authority',{retryable:false});
+  if(!options.parent?.guest){await mkdir(dirname(runtime),{recursive:true,mode:0o700});await ownedDirectory(dirname(runtime));}
+  if(!sameDirectory(await directoryInfo(runtime),record)){
+    try{await exec(options.binaries.input,['publish-root',record.stage,runtime,join(journal,'group.json')],{signal:request.signal,timeout:5000});}
+    catch(error){if(request.signal.aborted||!sameDirectory(await directoryInfo(runtime),record))throw error;}
+  }
+  if(!sameDirectory(await directoryInfo(runtime),record))throw new EngineError('INVALID_STATE','Runtime root no longer matches its private staged identity',{retryable:false});
+}
 async function closePublication(directory:string,binary:string,context:EngineCleanupContext):Promise<void>{await exec(binary,['close',join(directory,'lease.json')],{env:{PATH:'/usr/bin:/bin'},signal:context.signal,timeout:Math.max(1,context.timeoutMs)});}
-async function removeRuntime(directory:string):Promise<void>{try{await ownedDirectory(directory);await rm(directory,{recursive:true});}catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;}}
+async function removeRuntime(record:LeaseRecord,options:SwayOptions,context:EngineCleanupContext):Promise<void>{
+  if(!record.runtimeIdentity)return;const identity=record.runtimeIdentity,claim=join(record.journalDirectory,'claimed-runtime');
+  if(!await directoryInfo(claim)){
+    if(sameDirectory(await directoryInfo(join(record.journalDirectory,'runtime')),identity))return;
+    const source=await directoryInfo(record.directory);if(!source)return;
+    if(!sameDirectory(source,identity))throw new EngineError('INVALID_STATE','Runtime was replaced; retain cleanup evidence',{retryable:false});
+    await exec(options.binaries.input,['claim-root',record.directory,claim,String(identity.dev),String(identity.ino)],{signal:context.signal,timeout:context.timeoutMs});
+  }
+  if(!sameDirectory(await directoryInfo(claim),identity))throw new EngineError('INVALID_STATE','Private runtime claim does not match owned inode; preserve it',{retryable:false});
+  await rm(claim,{recursive:true});
+}
+async function removeRuntimeRoot(record:RuntimeRootRecord,options:SwayOptions,journal:string,context:EngineCleanupContext):Promise<void>{
+  const claim=join(journal,'claimed-run-root');
+  if(!await directoryInfo(claim)){
+    if(sameDirectory(await directoryInfo(record.stage),record))return;
+    const source=await directoryInfo(record.directory);if(!source)return;
+    if(!sameDirectory(source,record))throw new EngineError('INVALID_STATE','Runtime run-root was replaced; retain evidence',{retryable:false});
+    await exec(options.binaries.input,['claim-root',record.directory,claim,String(record.dev),String(record.ino)],{signal:context.signal,timeout:context.timeoutMs});
+  }
+  if(!sameDirectory(await directoryInfo(claim),record))throw new EngineError('INVALID_STATE','Private run-root claim does not match owned inode; preserve it',{retryable:false});
+  try{await rmdir(claim);}catch(error){if((error as NodeJS.ErrnoException).code==='ENOTEMPTY')await exec(options.binaries.input,['publish-root',claim,record.directory],{signal:context.signal,timeout:context.timeoutMs});throw error;}
+}
 
 async function stop(identity: ProcessIdentity, context: Pick<EngineCleanupContext, 'signal' | 'timeoutMs'>, binary: string): Promise<void> {
   if (!await stillOwned(identity)) return;
@@ -77,27 +135,34 @@ async function recordedProcesses(directory: string, processes: readonly ProcessI
   for (const identity of identities) if (!Number.isSafeInteger(identity.pid) || identity.pid <= 0 || !/^\d+$/.test(identity.start)) throw new EngineError('INVALID_STATE', 'Invalid owned process identity', { retryable: false });
   return [...new Map(identities.map(identity => [`${identity.pid}:${identity.start}`, identity])).values()];
 }
+async function recoverParent(record:LeaseRecord,parent:OwnedWaylandParent|undefined,signal:AbortSignal):Promise<void>{
+  if(!record.parentPending)return;
+  const result=await parent?.recover?.(record.parentPending,signal);
+  if(result?.kind==='PROCESS')record.processes.push(result.identity);
+  else if(result?.kind!=='NEVER_LAUNCHED')throw new EngineError('INVALID_STATE','Pending parent launch lacks authenticated cleanup authority; retain runtime and receipt',{retryable:false});
+  delete record.parentPending;
+}
 
 /** Fresh rootless compositor and input namespace; never discovers a host socket. */
 export async function swayDisplay(options: SwayOptions, request: TernRequest): Promise<SwayDisplay> {
   if (process.platform !== 'linux') throw new ConfigurationError('INVALID_CONFIG', 'Sway requires Linux');
   for (const binary of Object.values(options.binaries)) if (!isAbsolute(binary)) throw new ConfigurationError('INVALID_CONFIG', 'Native binaries must be explicit absolute pinned paths');
   if(options.parent?.guest&&(!isAbsolute(options.parent.guest.nsenter)||!options.journalRoot||!options.configurationRoot||!isAbsolute(options.configurationRoot)))throw new ConfigurationError('INVALID_CONFIG','Guest execution requires explicit absolute nsenter, host-private journals and read-only configuration root');
+  await journalBoundary(options);
   const size = options.size ?? { width: 1280, height: 900 };
   if (![size.width, size.height].every(value => Number.isInteger(value) && value >= 320 && value <= 8192)) throw new ConfigurationError('INVALID_CONFIG', 'Invalid isolated display size');
   const root = runDirectory(options, request.runId, request.targetName);
   if (!isAbsolute(root) || Buffer.byteLength(root) > 48) throw new ConfigurationError('INVALID_CONFIG', 'Native lease root exceeds Unix socket path limits');
-  if(options.parent?.guest){await exec(options.binaries.input,['mkdir-root',root],{signal:request.signal,timeout:5000});}
-  else{await mkdir(dirname(root),{recursive:true,mode:0o700});await ownedDirectory(dirname(root));await mkdir(root,{recursive:true,mode:0o700});await ownedDirectory(root);}
   const journalRoot=journalRunDirectory(options,request.runId,request.targetName);
   await mkdir(journalRoot,{recursive:true,mode:0o700});await ownedDirectory(journalRoot);
+  await prepareRuntimeRoot(options,request,journalRoot,root);
   const journalDirectory=await mkdtemp(join(journalRoot,'attempt-'));
-  const directory=journalRoot===root?journalDirectory:join(root,basename(journalDirectory));
-  const record: LeaseRecord = { version: 1, runId: request.runId, targetName: request.targetName, directory, journalDirectory, processes: [] };
+  const directory=join(root,basename(journalDirectory));
+  const record: LeaseRecord = { version: 2, runId: request.runId, targetName: request.targetName, directory, journalDirectory, processes: [] };
   const save = async () => {await writeFile(join(journalDirectory,'lease.next'),JSON.stringify(record),{mode:0o600});await rename(join(journalDirectory,'lease.next'),join(journalDirectory,'lease.json'));};
   await save();
-  const stage=directory===journalDirectory?directory:join(journalDirectory,'runtime');
-  try{if(stage!==journalDirectory)await mkdir(stage,{mode:0o700});for(const name of ['run','home','config','cache','state'])await mkdir(join(stage,name),{mode:0o700});const info=await lstat(stage);record.runtimeIdentity={dev:info.dev,ino:info.ino};await save();}
+  const stage=join(journalDirectory,'runtime');
+  try{await mkdir(stage,{mode:0o700});for(const name of ['run','home','config','cache','state'])await mkdir(join(stage,name),{mode:0o700});const info=await lstat(stage);record.runtimeIdentity={dev:info.dev,ino:info.ino};await save();}
   catch(error){await rm(journalDirectory,{recursive:true});throw error;}
   const ownsRuntime=async()=>{try{const info=await lstat(directory);return info.isDirectory()&&info.dev===record.runtimeIdentity?.dev&&info.ino===record.runtimeIdentity?.ino;}catch(error){if((error as NodeJS.ErrnoException).code==='ENOENT')return false;throw error;}};
   const seat = `agent-${createHash('sha256').update(directory).digest('hex').slice(0, 12)}`;
@@ -136,15 +201,15 @@ export async function swayDisplay(options: SwayOptions, request: TernRequest): P
     await closePublication(journalDirectory,options.binaries.input,context);
     const runtimeOwned=await ownsRuntime();
     if(directory!==journalDirectory&&runtimeOwned){const command=routed(options.binaries.input,['close',join(directory,'lease.json')]);await exec(command.binary,command.args,{signal:context.signal,timeout:context.timeoutMs});}
-    if(record.parentPending){const identity=await options.parent?.recover?.(record.parentPending,context.signal);if(!identity)throw new EngineError('INVALID_STATE','Pending parent launch lacks authenticated cleanup authority; retain runtime and receipt',{retryable:false});record.processes.push(identity);delete record.parentPending;await save();}
+    if(record.parentPending){await recoverParent(record,options.parent,context.signal);await save();}
     for (const identity of (await recordedProcesses(journalDirectory, record.processes)).toReversed()) await stop(identity, context, options.binaries.input);
     for (const child of children) child.unref();
-    if(runtimeOwned){if(ns){const cleanup=routed('/usr/bin/rm',['--recursive','--force','--one-file-system','--',directory]);await exec(cleanup.binary,cleanup.args,{signal:context.signal,timeout:context.timeoutMs});}else await removeRuntime(directory);}
-    if(record.configPath)await rm(record.configPath,{force:true});if(directory!==journalDirectory)await rm(journalDirectory,{recursive:true,force:true});
+    await removeRuntime(record,options,context);
+    if(record.configPath)await rm(record.configPath,{force:true});await rm(journalDirectory,{recursive:true,force:true});
     released = true;
   };
   try {
-    if(stage!==directory)await exec(options.binaries.input,['publish-root',stage,directory],{signal:request.signal,timeout:5000});
+    await exec(options.binaries.input,['publish-root',stage,directory,join(journalDirectory,'lease.json')],{signal:request.signal,timeout:5000});
     if (options.parent) {
       const parentEnv = { ...env, WAYLAND_DISPLAY: join(options.parent.runtimeDir, options.parent.waylandDisplay) };
       const identityFile = join(directory, `launch-${randomUUID()}.json`);
@@ -317,10 +382,12 @@ export function sway(options: SwayOptions): TernProvider {
     },
     async release(lease, context) { const display = displays.get(lease.id); if (!display) return; await display.release(context); displays.delete(lease.id); },
     async sweep(request, context) {
+      await journalBoundary(options);
       const root = journalRunDirectory(options, request.runId, request.targetName);
       let entries: string[];
       try { await ownedDirectory(root); entries = await readdir(root); }
       catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return; throw error; }
+      await closePublication(root,options.binaries.input,context);
       for (const name of entries) {
         if (!name.startsWith('attempt-')) continue;
         const journalDirectory = join(root, name); await ownedDirectory(journalDirectory);
@@ -329,20 +396,22 @@ export function sway(options: SwayOptions): TernProvider {
         try{record=JSON.parse(await readFile(join(journalDirectory,'lease.json'),'utf8')) as LeaseRecord;}
         catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;await rm(journalDirectory,{recursive:true});continue;}
         const runtimeDirectory=join(runDirectory(options,request.runId,request.targetName),name);
-        if (record.version !== 1 || record.runId !== request.runId || record.targetName !== request.targetName || record.journalDirectory !== journalDirectory||record.directory!==runtimeDirectory) throw new EngineError('INVALID_STATE', 'Refusing unowned native cleanup record', { retryable: false });
+        if (record.version !== 2 || record.runId !== request.runId || record.targetName !== request.targetName || record.journalDirectory !== journalDirectory||record.directory!==runtimeDirectory) throw new EngineError('INVALID_STATE', 'Refusing unowned native cleanup record', { retryable: false });
         const guest=options.parent?.guest,ns=guest?[String(guest.target.pid),guest.target.start,guest.nsenter]:undefined;
         const routed=(binary:string,args:string[])=>ns?{binary:options.binaries.input,args:['enter-ns',...ns,binary,...args]}:{binary,args};
         let runtimeOwned=false;try{const info=await lstat(record.directory);runtimeOwned=info.isDirectory()&&info.dev===record.runtimeIdentity?.dev&&info.ino===record.runtimeIdentity?.ino;}catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;}
         if(record.directory!==journalDirectory&&runtimeOwned){const command=routed(options.binaries.input,['close',join(record.directory,'lease.json')]);await exec(command.binary,command.args,{signal:context.signal,timeout:context.timeoutMs});}
-        if(record.parentPending){const identity=await options.parent?.recover?.(record.parentPending,context.signal);if(!identity)throw new EngineError('INVALID_STATE','Pending parent launch lacks authenticated cleanup authority; retain runtime and receipt',{retryable:false});record.processes.push(identity);delete record.parentPending;await writeFile(join(journalDirectory,'lease.next'),JSON.stringify(record),{mode:0o600});await rename(join(journalDirectory,'lease.next'),join(journalDirectory,'lease.json'));}
+        if(record.parentPending){await recoverParent(record,options.parent,context.signal);await writeFile(join(journalDirectory,'lease.next'),JSON.stringify(record),{mode:0o600});await rename(join(journalDirectory,'lease.next'),join(journalDirectory,'lease.json'));}
         for(const identity of(await recordedProcesses(journalDirectory,record.processes)).toReversed())await stop(identity,context,options.binaries.input);
-        if(runtimeOwned){if(ns){const command=routed('/usr/bin/rm',['--recursive','--force','--one-file-system','--',record.directory]);await exec(command.binary,command.args,{signal:context.signal,timeout:context.timeoutMs});}else await removeRuntime(record.directory);}
+        await removeRuntime(record,options,context);
         if(record.configPath){const configRoot=options.configurationRoot??journalDirectory;if(dirname(record.configPath)!==configRoot||!/^sway-[a-f0-9-]+\.conf$/.test(basename(record.configPath)))throw new EngineError('INVALID_STATE','Unowned native configuration path',{retryable:false});await rm(record.configPath,{force:true});}
-        if(record.directory!==journalDirectory)await rm(journalDirectory,{recursive:true});
+        await rm(journalDirectory,{recursive:true});
       }
-      await rmdir(root);
-      const runtimeRoot=runDirectory(options,request.runId,request.targetName);
-      if(runtimeRoot!==root){try{await ownedDirectory(runtimeRoot);const guest=options.parent?.guest;if(guest)await exec(options.binaries.input,['enter-ns',String(guest.target.pid),guest.target.start,guest.nsenter,'/usr/bin/rmdir','--',runtimeRoot],{signal:context.signal,timeout:context.timeoutMs});else await rmdir(runtimeRoot);}catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;}}
+      const runtimeRoot=runDirectory(options,request.runId,request.targetName),allocation=await rootRecord(root,runtimeRoot,request.runId,request.targetName);
+      if(allocation)await removeRuntimeRoot(allocation,options,root,context);
+      for(const name of await readdir(root)){if(name.startsWith('run-stage-')){const path=join(root,name);await ownedDirectory(path);await rm(path,{recursive:true});}else if(/^root-proposal-[a-f0-9-]+\.json$/.test(name))await rm(join(root,name));}
+      await rm(join(root,'runtime-root.json'),{force:true});await rm(join(root,'.closing'),{force:true});await rm(join(root,'.lifecycle.lock'),{force:true});await rmdir(root);
+      if(options.journalRoot===undefined){try{await ownedDirectory(journalPrefix(options));await rmdir(journalPrefix(options));}catch(error){if(!['ENOENT','ENOTEMPTY'].includes((error as NodeJS.ErrnoException).code??''))throw error;}}
     },
   };
 }
