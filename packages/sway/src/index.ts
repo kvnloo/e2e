@@ -60,7 +60,7 @@ interface Seat { name: string; focus: number }
 const keyNames: Readonly<Record<string, string>> = { Enter: 'Return', Escape: 'Escape', Tab: 'Tab', Backspace: 'BackSpace', Delete: 'Delete', Insert: 'Insert', Space: 'space', ArrowUp: 'Up', ArrowDown: 'Down', ArrowLeft: 'Left', ArrowRight: 'Right', Home: 'Home', End: 'End', PageUp: 'Prior', PageDown: 'Next', F1: 'F1', F2: 'F2', F3: 'F3', F4: 'F4', F5: 'F5', F6: 'F6', F7: 'F7', F8: 'F8', F9: 'F9', F10: 'F10', F11: 'F11', F12: 'F12' };
 const modifiers: Readonly<Record<string, number>> = { Shift: 1, Control: 2, ControlOrMeta: 2, Alt: 4, Meta: 8 };
 const runDirectory = (options: SwayOptions, runId: string, targetName: string): string => join(options.root ?? join(tmpdir(), `e2e-sway-${process.getuid?.()}`), createHash('sha256').update(runId).update('\0').update(targetName).digest('hex').slice(0, 24));
-const journalRunDirectory=(options:SwayOptions,runId:string,target:string)=>runDirectory({...options,root:options.journalRoot??options.root},runId,target);
+const journalRunDirectory=(options:SwayOptions,runId:string,target:string)=>runDirectory(options.journalRoot===undefined?options:{...options,root:options.journalRoot},runId,target);
 async function closePublication(directory:string,binary:string,context:EngineCleanupContext):Promise<void>{await exec(binary,['close',join(directory,'lease.json')],{env:{PATH:'/usr/bin:/bin'},signal:context.signal,timeout:Math.max(1,context.timeoutMs)});}
 async function removeRuntime(directory:string):Promise<void>{try{await ownedDirectory(directory);await rm(directory,{recursive:true});}catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;}}
 
