@@ -3,7 +3,7 @@ import {once} from 'node:events';
 import {mkdir,mkdtemp,readdir,readFile,writeFile,symlink,rm} from 'node:fs/promises';
 import {createServer} from 'node:net';
 import {join} from 'node:path';
-import {expect,test} from 'vitest';
+import {describe,expect,test} from 'vitest';
 import {hyprland,type HyprlandOptions} from '../../src/index.ts';
 import {processIdentity,stillOwned} from '@e2e-dev/sway';
 import type {TernRequest} from '@e2e-dev/tern';
@@ -32,6 +32,7 @@ async function fixture(){
   return{directory,nativeRoot,options,request,root,attempt,childRoot,record,data,stateFile,save,close};
 }
 const cleanup=()=>({signal:new AbortController().signal,timeoutMs:1000});
+describe.skipIf(process.platform!=='linux')('Linux public containment lifecycle',()=>{
 test('artifact allocation failure removes the already-journaled empty child root',async()=>{
   const f=await fixture();try{const blocked=join(f.directory,'not-a-directory');await writeFile(blocked,'inert');await expect(hyprland(f.options).acquire({...f.request,artifactsDir:join(blocked,'artifacts')})).rejects.toThrow();expect(await readdir(f.nativeRoot)).toEqual([]);expect(await readdir(f.root)).toEqual([]);}finally{await f.close();}
 });
@@ -46,4 +47,5 @@ test('cleanup refuses changed owned-output geometry and a forged guest generatio
 });
 test('guest-writable ancestors and symlinks cannot become cleanup journals',async()=>{
   const f=await fixture();try{const guestJournals=join(f.nativeRoot,'journals');await mkdir(guestJournals,{mode:0o700});const alias=join(f.directory,'alias');await symlink(guestJournals,alias);for(const root of [guestJournals,alias])await expect(hyprland({...f.options,root}).acquire(f.request)).rejects.toThrow('guest-writable root');}finally{await f.close();}
+});
 });
