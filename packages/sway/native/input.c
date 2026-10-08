@@ -379,6 +379,16 @@ static int before_effect(FILE *connection, const char *name) {
   if (wait_cutpoint(name)) return 2;
   return peer_live(connection) ? 0 : 2;
 }
+static void note_effect(const char *name) {
+  if (!socket_directory[0] || !name) return;
+  char path[4096];
+  int n = snprintf(path, sizeof path, "%s/effect.receipt", socket_directory);
+  if (n < 0 || (size_t)n >= sizeof path) return;
+  int fd = open(path, O_WRONLY | O_CREAT | O_APPEND | O_NOFOLLOW | O_CLOEXEC, 0600);
+  if (fd < 0) return;
+  dprintf(fd, "%s\n", name);
+  close(fd);
+}
 static int send_key(FILE *connection,const char *symbol,unsigned requested_modifiers) {
   if (requested_modifiers > 15) return 2;
   xkb_keysym_t keysym = xkb_keysym_from_name(symbol, XKB_KEYSYM_NO_FLAGS);
@@ -402,6 +412,7 @@ static int send_key(FILE *connection,const char *symbol,unsigned requested_modif
       unicode_active = false;
       memcpy(active_modifiers, base_modifiers, sizeof base_modifiers);
       if (wl_display_roundtrip(display) < 0) return 2;
+      note_effect("keymap-restore");
       if (!peer_live(connection)) return 2;
     }
   } else if (scalar > 127) {
@@ -432,6 +443,7 @@ static int send_key(FILE *connection,const char *symbol,unsigned requested_modif
       unicode_active = true; unicode_scalar = scalar;
       memcpy(active_modifiers, next_modifiers, sizeof next_modifiers);
       if (wl_display_roundtrip(display) < 0) return 2;
+      note_effect("keymap-unicode");
       if (!peer_live(connection)) return 2;
     }
     entry.code = 30;
@@ -439,18 +451,25 @@ static int send_key(FILE *connection,const char *symbol,unsigned requested_modif
   requested_modifiers |= entry.modifiers;
   uint32_t depressed = 0;
   for (unsigned i = 0; i < 4; i++) if (requested_modifiers & (1u << i)) {
-    if (before_effect(connection, "modifier-press")) return 2;
+    char cut[32];
+    int n = snprintf(cut, sizeof cut, "modifier-press-%u", i);
+    if (n < 0 || (size_t)n >= sizeof cut) return 2;
+    if ((i == 0 && before_effect(connection, "modifier-press")) || before_effect(connection, cut)) return 2;
     zwp_virtual_keyboard_v1_key(keyboard, clock_ms(), modifier_keys[i], WL_KEYBOARD_KEY_STATE_PRESSED);
     modifiers_down |= 1u << i; depressed |= active_modifiers[i];
     if (wl_display_roundtrip(display) < 0) return 2;
+    note_effect("modifier-press");
+    note_effect(cut);
   }
   if (before_effect(connection, "modifier-state")) return 2;
   zwp_virtual_keyboard_v1_modifiers(keyboard, depressed, 0, 0, 0);
   if (wl_display_roundtrip(display) < 0) return 2;
+  note_effect("modifier-state");
   if (before_effect(connection, "key-press")) return 2;
   active_key = entry.code;
   zwp_virtual_keyboard_v1_key(keyboard, clock_ms(), active_key, WL_KEYBOARD_KEY_STATE_PRESSED); key_down = true;
   if (wl_display_roundtrip(display) < 0) return 2;
+  note_effect("key-press");
   release_keys();
   return wl_display_roundtrip(display) < 0 ? 2 : 0;
 }
@@ -487,10 +506,12 @@ static int request(FILE *connection) {
     if (before_effect(connection, "pointer-motion")) goto release;
     zwlr_virtual_pointer_v1_motion_absolute(pointer, clock_ms(), x, y, width, height); zwlr_virtual_pointer_v1_frame(pointer);
     if (wl_display_roundtrip(display) < 0) goto release;
+    note_effect("pointer-motion");
     if (click) {
       if (before_effect(connection, "pointer-button")) goto release;
       zwlr_virtual_pointer_v1_button(pointer, clock_ms(), 0x110, WL_POINTER_BUTTON_STATE_PRESSED); pointer_down = true; zwlr_virtual_pointer_v1_frame(pointer);
       if (wl_display_roundtrip(display) < 0) goto release;
+      note_effect("pointer-button");
       zwlr_virtual_pointer_v1_button(pointer, clock_ms(), 0x110, WL_POINTER_BUTTON_STATE_RELEASED); pointer_down = false; zwlr_virtual_pointer_v1_frame(pointer);
     }
     result = wl_display_roundtrip(display) < 0 ? 2 : 0;
