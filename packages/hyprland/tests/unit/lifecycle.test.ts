@@ -1,6 +1,6 @@
 import {createHash} from 'node:crypto';
 import {once} from 'node:events';
-import {mkdir,mkdtemp,readdir,readFile,writeFile,symlink,rm} from 'node:fs/promises';
+import {mkdir,mkdtemp,readdir,readFile,writeFile,symlink,lstat,rename,rm} from 'node:fs/promises';
 import {createServer} from 'node:net';
 import {join} from 'node:path';
 import {describe,expect,test} from 'vitest';
@@ -48,4 +48,11 @@ test('cleanup refuses changed owned-output geometry and a forged guest generatio
 test('guest-writable ancestors and symlinks cannot become cleanup journals',async()=>{
   const f=await fixture();try{const guestJournals=join(f.nativeRoot,'journals');await mkdir(guestJournals,{mode:0o700});const alias=join(f.directory,'alias');await symlink(guestJournals,alias);for(const root of [guestJournals,alias])await expect(hyprland({...f.options,root}).acquire(f.request)).rejects.toThrow('guest-writable root');}finally{await f.close();}
 });
+test('planned and staged allocation never remove a colliding foreign private directory',async()=>{
+  const f=await fixture();try{await mkdir(f.childRoot,{mode:0o700});const foreign=await lstat(f.childRoot);await f.save();await hyprland(f.options).sweep!(f.request,cleanup());assertIdentity(await lstat(f.childRoot),foreign);await f.save();const stage=join(f.attempt,'child-stage');await mkdir(stage,{mode:0o700});const identity=await lstat(stage);await f.save({childIdentity:{dev:identity.dev,ino:identity.ino}});await hyprland(f.options).sweep!(f.request,cleanup());assertIdentity(await lstat(f.childRoot),foreign);}finally{await f.close();}
 });
+test('crash after atomic publication is recovered using the already-persisted inode',async()=>{
+  const f=await fixture();try{await f.save();const stage=join(f.attempt,'child-stage');await mkdir(stage,{mode:0o700});const identity=await lstat(stage);await f.save({childIdentity:{dev:identity.dev,ino:identity.ino}});await rename(stage,f.childRoot);await hyprland(f.options).sweep!(f.request,cleanup());await expect(lstat(f.childRoot)).rejects.toMatchObject({code:'ENOENT'});}finally{await f.close();}
+});
+});
+function assertIdentity(actual:{dev:number;ino:number},expected:{dev:number;ino:number}){expect(actual.dev).toBe(expected.dev);expect(actual.ino).toBe(expected.ino);}

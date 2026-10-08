@@ -16,12 +16,14 @@ export interface HyprlandOptions {
   readonly protectedOutputs: readonly string[];
   /** Named workspace only. Omit for a generated per-attempt name. It must not exist, even empty. */
   readonly workspace?: string;
-  readonly sway: Omit<SwayOptions, 'parent' | 'root' | 'journalRoot'>;
+  readonly sway: Omit<SwayOptions, 'parent' | 'root' | 'journalRoot' | 'configurationRoot'>;
   readonly root?: string;
   /** Short private directory shared with an explicitly sandboxed parent, if used. */
   readonly nativeRoot?: string;
+  /** Disposable guest only: explicit namespace entrant and host-created read-only config mount. */
+  readonly guest?:{readonly nsenter:string;readonly configurationRoot:string};
 }
-interface Record { version: 1; runId: string; targetName: string; directory: string; output: string; tag: string; workspace: string; childRoot: string; host: ProcessIdentity; existingWorkspaces: number[]; outputRequested?: boolean; workspaceId?: number; workspaceOriginalName?: string; workspaceRenamed?: boolean; identityFile?: string; child?: ProcessIdentity; outputId?: number; outputGeometry?: {x:number;y:number;width:number;height:number;scale:number}; artifactsDir: string; artifactsReady?: boolean }
+interface Record { version: 1; runId: string; targetName: string; directory: string; output: string; tag: string; workspace: string; childRoot: string; childIdentity?:{dev:number;ino:number}; host: ProcessIdentity; existingWorkspaces: number[]; outputRequested?: boolean; workspaceId?: number; workspaceOriginalName?: string; workspaceRenamed?: boolean; identityFile?: string; child?: ProcessIdentity; outputId?: number; outputGeometry?: {x:number;y:number;width:number;height:number;scale:number}; artifactsDir: string; artifactsReady?: boolean }
 interface Workspace { id: number; name: string; monitorID: number | string; windows: number; ispersistent: boolean }
 const fail = (message: string) => new EngineError('INVALID_STATE', message, { retryable: false });
 const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
@@ -30,6 +32,7 @@ function validate(options: HyprlandOptions): void {
   if (process.platform !== 'linux' || !isAbsolute(options.host.hyprctl) || !isAbsolute(options.host.runtimeDir) || !/^[A-Za-z0-9_-]+$/.test(options.host.instance) || !/^wayland-\d+$/.test(options.host.waylandDisplay) || !options.protectedWorkspaces.length || (options.workspace !== undefined && (!/^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(options.workspace)))) throw new ConfigurationError('INVALID_CONFIG', 'Hyprland requires an explicit instance/display/binary and protected-workspace policy');
   if (!options.protectedOutputs.length || new Set(options.protectedOutputs).size !== options.protectedOutputs.length || options.protectedOutputs.some(name => !/^[A-Za-z0-9_.:-]+$/.test(name))) throw new ConfigurationError('INVALID_CONFIG', 'Declare each measured protected output explicitly');
   if (options.workspace !== undefined && options.protectedWorkspaces.includes(options.workspace)) throw new ConfigurationError('INVALID_CONFIG', 'Refusing a protected workspace');
+  if(options.guest&&(!isAbsolute(options.guest.nsenter)||!isAbsolute(options.guest.configurationRoot)||!options.host.process))throw new ConfigurationError('INVALID_CONFIG','Guest containment requires explicit namespace/configuration paths and an independently pinned parent');
 }
 function controller(options: HyprlandOptions) {
   const env = { PATH: '/usr/bin:/bin', LANG: 'C.UTF-8', XDG_RUNTIME_DIR: options.host.runtimeDir, HYPRLAND_INSTANCE_SIGNATURE: options.host.instance };
@@ -81,7 +84,7 @@ function resource(options: HyprlandOptions, record: Record) {
     if (options.protectedWorkspaces.some(w=>w===output.activeWorkspace.id || w===output.activeWorkspace.name)) throw fail('Owned output activated a protected workspace');
     if(record.outputGeometry&&JSON.stringify({x:output.x,y:output.y,width:output.width,height:output.height,scale:output.scale})!==JSON.stringify(record.outputGeometry))throw fail('Owned output logical geometry changed');
     if(record.workspaceId!==undefined&&(output.activeWorkspace.id!==record.workspaceId||(record.workspaceRenamed?output.activeWorkspace.name!==record.workspace:output.activeWorkspace.name!==record.workspaceOriginalName&&output.activeWorkspace.name!==record.workspace)))throw fail('Owned workspace identity or rename phase changed');
-    if(!record.child&&record.identityFile){try{const candidate=JSON.parse(await readFile(record.identityFile,'utf8')) as ProcessIdentity;if(await stillOwned(candidate)){if(!await ownedDescendant(candidate,record.host))throw fail('Guest launch receipt is not an independently verified descendant of the pinned compositor');const scoped=clients.filter(c=>c.pid===candidate.pid&&c.monitor===output.id&&c.tags.some(t=>t===record.tag||t===`${record.tag}*`));if(scoped.length===1){ownedClient(scoped[0]!,candidate.pid,record.tag,output,record.workspace,size);record.child=candidate;await save(record);}}}catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;}}
+    if(!record.child){const scoped=clients.filter(c=>c.monitor===output.id&&c.tags.some(t=>t===record.tag||t===`${record.tag}*`));if(scoped.length===1){ownedClient(scoped[0]!,scoped[0]!.pid,record.tag,output,record.workspace,size);const candidate=await processIdentity(scoped[0]!.pid);if(!await ownedDescendant(candidate,record.host))throw fail('Tagged recovery client is outside the independently pinned compositor ancestry');record.child=candidate;await save(record);}else if(record.identityFile){try{const candidate=JSON.parse(await readFile(record.identityFile,'utf8')) as ProcessIdentity;if(await stillOwned(candidate)&&!await ownedDescendant(candidate,record.host))throw fail('Guest launch receipt is not an independently verified descendant of the pinned compositor');}catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;}}}
     const tagged = clients.filter(c=>c.tags.some(t=>t===record.tag||t===`${record.tag}*`));
     const onOutput = clients.filter(c=>c.monitor===output.id);
     const childAlive=record.child!==undefined&&await stillOwned(record.child);
@@ -93,7 +96,9 @@ function resource(options: HyprlandOptions, record: Record) {
     return output;
   };
   const guard = async (signal: AbortSignal) => { await verify(signal,true); const before=await proof(signal); return async()=>{ await verify(signal,true); await log('operation',before,await proof(signal)); }; };
-  const parent: OwnedWaylandParent = { runtimeDir: options.host.runtimeDir, waylandDisplay: options.host.waylandDisplay, guard,
+  const parent:OwnedWaylandParent={runtimeDir:options.host.runtimeDir,waylandDisplay:options.host.waylandDisplay,guard,
+    ...(options.guest?{guest:{target:record.host,nsenter:options.guest.nsenter}}:{}),
+    async recover(identityFile,signal){if(identityFile!==record.identityFile)throw fail('Pending parent recovery endpoint changed');await verify(signal,false);return record.child;},
     async launch(binary,args,env,identityFile,signal) {
       if (args[0]!=='supervise' || args[1]!==identityFile || args[2]!==options.sway.binaries.sway) throw fail('Only the exact owned nested compositor may be launched');
       await verify(signal,false); await ownedDirectory(dirname(identityFile));
@@ -118,10 +123,10 @@ function resource(options: HyprlandOptions, record: Record) {
       await verify(signal,true); await log('launch',before,await proof(signal)); return record.child!;
     }
   };
-  const provider=sway({...options.sway,root:record.childRoot,journalRoot:join(record.directory,'sway-journals'),parent});
+  const provider=sway({...options.sway,root:record.childRoot,journalRoot:join(record.directory,'sway-journals'),configurationRoot:options.guest?.configurationRoot,parent});
   const close = async(context: EngineCleanupContext, lease?: TernLease) => {
     const signal=context.signal, before=await proof(signal);
-    if(record.identityFile){try{await ownedDirectory(dirname(record.identityFile));await exec(options.sway.binaries.input,['close',record.identityFile],{env:{PATH:'/usr/bin:/bin'},signal,timeout:context.timeoutMs});}catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;}}
+    if(record.identityFile){try{await ownedDirectory(dirname(record.identityFile));const args=['close',record.identityFile];await exec(options.sway.binaries.input,options.guest?['enter-ns',String(record.host.pid),record.host.start,options.guest.nsenter,options.sway.binaries.input,...args]:args,{env:{PATH:'/usr/bin:/bin'},signal,timeout:context.timeoutMs});}catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;}}
     const monitors=await ctl.query<Monitor[]>('monitors',signal);
     if(monitors.some(m=>m.name===record.output)) await verify(signal,false);
     if(!record.child&&record.identityFile){const deadline=Date.now()+context.timeoutMs;for(;;){await verify(signal,false);if(record.child)break;let candidate:ProcessIdentity;try{candidate=JSON.parse(await readFile(record.identityFile,'utf8')) as ProcessIdentity;}catch(error){if((error as NodeJS.ErrnoException).code==='ENOENT')break;throw error;}if(!await stillOwned(candidate))break;if(!await ownedDescendant(candidate,record.host))throw fail('Refusing an unverified guest cleanup receipt');if(Date.now()>=deadline)throw fail('Published nested process never established independently verified tagged containment');await delay(25,undefined,{signal});}}
@@ -140,7 +145,7 @@ function resource(options: HyprlandOptions, record: Record) {
       if(Date.now()>=deadline) throw fail('Owned nonpersistent workspace survived cleanup');
       await delay(25,undefined,{signal});
     }
-    await removeChildRoot(record.childRoot);
+    if(record.childIdentity){try{const info=await lstat(record.childRoot);if(info.dev===record.childIdentity.dev&&info.ino===record.childIdentity.ino){if(options.guest)await exec(options.sway.binaries.input,['enter-ns',String(record.host.pid),record.host.start,options.guest.nsenter,'/usr/bin/rmdir','--',record.childRoot],{signal,timeout:context.timeoutMs});else await removeChildRoot(record.childRoot);}}catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;}}
     await rm(record.directory,{recursive:true});
   };
   return {provider,close,verify,proof,log,ctl};
@@ -164,14 +169,16 @@ export function hyprland(options: HyprlandOptions): TernProvider {
       if(!isAbsolute(nativeRoot)||Buffer.byteLength(nativeRoot)>14) throw new ConfigurationError('INVALID_CONFIG','Native compositor root must be an explicit absolute directory of at most 14 bytes');
       await mkdir(nativeRoot,{recursive:true,mode:0o700}); await ownedDirectory(nativeRoot);
       await privateBoundary(dirname(root),[nativeRoot,options.host.runtimeDir]);
+      if(options.guest){await ownedDirectory(options.guest.configurationRoot);await privateBoundary(options.guest.configurationRoot,[nativeRoot,options.host.runtimeDir]);}
       const directory=await mkdtemp(join(root,'attempt-')), childRoot=join(nativeRoot,`s-${token.slice(0,6)}`);
       const record: Record={version:1,runId:request.runId,targetName:request.targetName,directory,childRoot,host,existingWorkspaces:workspaces.map(w=>w.id),output:`e2e-${token}`,tag:`e2e-${token}`,workspace,artifactsDir:request.artifactsDir};
       try{await save(record);}catch(error){await rm(directory,{recursive:true});throw error;}
       const owned=resource(options,record);
       try {
-        await mkdir(childRoot,{mode:0o700});await ownedDirectory(childRoot);
+        const stage=join(record.directory,'child-stage');await mkdir(stage,{mode:0o700});const info=await lstat(stage);record.childIdentity={dev:info.dev,ino:info.ino};await save(record);
         await mkdir(request.artifactsDir,{recursive:true,mode:0o700});
         record.artifactsReady=true;await save(record);
+        await exec(options.sway.binaries.input,['publish-root',stage,childRoot],{signal:request.signal,timeout:5000});await ownedDirectory(childRoot);
         const before=await owned.proof(request.signal);
         if((await ctl.query<Monitor[]>('monitors',request.signal)).some(m=>m.name===record.output)||(await ctl.query<Client[]>('clients',request.signal)).some(c=>c.tags.includes(record.tag))) throw fail('Generated output/tag collision');
         record.outputRequested=true; await save(record);

@@ -18,6 +18,7 @@ jobs:
       E2E_HYPRLAND_BINARY: /usr/bin/Hyprland
       E2E_HYPRCTL_BINARY: /usr/bin/hyprctl
       E2E_BWRAP_BINARY: /usr/bin/bwrap
+      E2E_NSENTER_BINARY: /usr/bin/nsenter
       E2E_RENDER_DEVICE: ${{ vars.E2E_NATIVE_RENDER_DEVICE }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -30,7 +31,7 @@ jobs:
         run: |
           test -n "$TERN_RUNTIME_URL" && test -n "$TERN_RUNTIME_SHA256" || { echo '::error::Supply a permitted public pinned native Tern archive; closed beta is not a simulated smoke pass.'; exit 1; }
           test -n "$E2E_RENDER_DEVICE" && test -c "$E2E_RENDER_DEVICE" && test -r "$E2E_RENDER_DEVICE" && test -w "$E2E_RENDER_DEVICE" || { echo '::error::Provision an explicit already-readable render-only node on a disposable runner; never change permissions or use KMS.'; exit 1; }
-          for binary in "$E2E_SWAY_BINARY" "$E2E_SWAYMSG_BINARY" "$E2E_GRIM_BINARY" "$E2E_HYPRLAND_BINARY" "$E2E_HYPRCTL_BINARY" "$E2E_BWRAP_BINARY"; do test -x "$binary" || { echo '::error::Provision source-pinned graphics runtimes and rootless user namespaces on the disposable runner.'; exit 1; }; done
+          for binary in "$E2E_SWAY_BINARY" "$E2E_SWAYMSG_BINARY" "$E2E_GRIM_BINARY" "$E2E_HYPRLAND_BINARY" "$E2E_HYPRCTL_BINARY" "$E2E_BWRAP_BINARY" "$E2E_NSENTER_BINARY"; do test -x "$binary" || { echo '::error::Provision source-pinned graphics runtimes, explicit nsenter and rootless user namespaces on the disposable runner.'; exit 1; }; done
           mkdir -p "$RUNNER_TEMP/tern-runtime"
           curl --fail --location --proto '=https' "$TERN_RUNTIME_URL" -o "$RUNNER_TEMP/tern-runtime.tar.gz"
           printf '%s  %s\n' "$TERN_RUNTIME_SHA256" "$RUNNER_TEMP/tern-runtime.tar.gz" | sha256sum --check
