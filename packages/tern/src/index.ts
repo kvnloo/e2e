@@ -189,9 +189,10 @@ export function ternEngine({ provider }: TernOptions): EngineHandle {
     ...(native && !provider.borrowed ? { session: {
       async restart(context: OperationContext) {
         if (!request) throw new EngineError('INVALID_STATE', 'Tern has no app to restart', { retryable: false });
+        const currentRequest = request;
         return withinOperation(context,async bounded=>{
         await end(bounded);
-        lease = await provider.acquire({ ...request, signal: bounded.signal });
+        lease = await provider.acquire({ ...currentRequest, signal: bounded.signal });
         });
       },
     } } : {}),
