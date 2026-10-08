@@ -149,7 +149,8 @@ static int publish_root(const char *source,const char *destination,const char *f
   struct open_how how={.flags=O_RDONLY|O_DIRECTORY|O_CLOEXEC,.resolve=RESOLVE_BENEATH|RESOLVE_NO_SYMLINKS};
   int dir=(int)syscall(SYS_openat2,slash,parent+1,&how,sizeof how);close(slash);if(dir<0){if(lock>=0)close(lock);return 2;}
   int result=(int)syscall(SYS_renameat2,AT_FDCWD,source,dir,name,RENAME_NOREPLACE);close(dir);
-  if(lock>=0)close(lock);return result<0?2:0;
+  if(lock>=0)close(lock);
+  return result<0?2:0;
 }
 static int record_identity(const char *path) {
   char stat_path[64], stat_text[4096]; snprintf(stat_path, sizeof stat_path, "/proc/%ld/stat", (long)getpid());
