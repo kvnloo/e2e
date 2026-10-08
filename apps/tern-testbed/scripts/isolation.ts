@@ -38,24 +38,34 @@ try {
   await waitField(agent,'replaced',request.signal);
   assert(JSON.stringify(await nativeControl(agent,'a11y',request.signal)).includes('Count: 0'),'cancelled queued pointer must not click');
   const hold=join(agent.id,'cutpoint.hold'),marker=join(agent.id,'cutpoint'),waiting=join(agent.id,'cutpoint.waiting'),receipt=join(agent.id,'effect.receipt');
-  const snap=async()=>await readFile(receipt,'utf8').catch(()=>'');
+  const snap=async()=>await readFile(receipt,'utf8');
+  assert((await snap()).split('\n').includes('key-press'),'warmup effect receipt must be readable before cutpoints');
+  const complete=async()=>{
+    const socket=await connect();
+    const {promise,resolve,reject}=Promise.withResolvers<void>();
+    let reply='',settled=false;
+    const finish=(error?:Error)=>{if(settled)return;settled=true;if(error)reject(error);else resolve();};
+    socket.on('data',data=>{reply+=data.toString();if(reply.includes('\n'))finish(reply==='OK\n'?undefined:new Error(`T 0 reply ${JSON.stringify(reply)}`));});
+    socket.on('error',error=>finish(error instanceof Error?error:new Error('T 0 transport')));
+    socket.on('close',()=>{if(!reply.includes('\n'))finish(new Error('T 0 ended without reply'));});
+    await new Promise<void>((accept,fail)=>socket.write('T 0\n',error=>error?fail(error):accept()));
+    await promise;
+    socket.destroy();
+  };
   const park=async(name:string,command:string)=>{
     const prior=await snap();
     await writeFile(hold,'');
     await writeFile(marker,name);
     const socket=await connect();
     const closed=once(socket,'close');
-    await new Promise<void>((accept,reject)=>socket.write(command,error=>error?reject(error):accept()));
+    await new Promise<void>((accept,fail)=>socket.write(command,error=>error?fail(error):accept()));
     const deadline=Date.now()+5000;
     for(;;){
       try{await access(waiting);break;}catch{assert(Date.now()<deadline,`native cutpoint ${name} was not reached`);await delay(10,undefined,{signal:request.signal});}
     }
     socket.destroy();await closed;
     await rm(hold);
-    const released=Date.now()+5000;
-    while(Date.now()<released){
-      try{await access(waiting);await delay(10,undefined,{signal:request.signal});}catch{break;}
-    }
+    await complete();
     const delta=(await snap()).slice(prior.length).split('\n').filter(Boolean);
     assert(!delta.includes(name),`cancelled ${name} must not append an effect receipt`);
   };
