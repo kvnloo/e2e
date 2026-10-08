@@ -7,6 +7,8 @@
 #include <sys/stat.h>
 #include <sys/syscall.h>
 #include <sys/file.h>
+#include <linux/openat2.h>
+#include <linux/fs.h>
 #include <dirent.h>
 #include <sys/socket.h>
 #include <sys/un.h>
@@ -111,6 +113,50 @@ static int lifecycle_lock(const char *identity_path, bool close_lease) {
   else if(faccessat(dir,".closing",F_OK,AT_SYMLINK_NOFOLLOW)==0){close(lock);close(dir);return -1;}
   close(dir);return lock;
 }
+/* Pin every namespace before any entry. The second generation check closes
+ * proc-name reuse; nsenter receives inherited descriptors, never --target. */
+static int enter_namespaces(int argc,char **argv,int at) {
+  if(argc<at+4)return 2;
+  char *end;long pid=strtol(argv[at],&end,10);if(*end||pid<=0||pid>0x7fffffff)return 2;
+  unsigned long long before,after;pid_t parent;
+  if(!process_info((pid_t)pid,&before,&parent)||before!=strtoull(argv[at+1],&end,10)||*end)return 2;
+  int pinned=(int)syscall(SYS_pidfd_open,(pid_t)pid,0);if(pinned<0)return 2;
+  char proc[64];snprintf(proc,sizeof proc,"/proc/%ld",pid);
+  int directory=open(proc,O_RDONLY|O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC);if(directory<0)return 2;
+  const char *names[]={"user","mnt","net","ipc","uts"},*flags[]={"--user=","--mount=","--net=","--ipc=","--uts="};
+  int descriptors[5];char options[5][64];
+  for(unsigned i=0;i<5;i++){char path[32];snprintf(path,sizeof path,"ns/%s",names[i]);descriptors[i]=openat(directory,path,O_RDONLY);if(descriptors[i]<0)return 2;snprintf(options[i],sizeof options[i],"%s/proc/self/fd/%d",flags[i],descriptors[i]);}
+  int root=openat(directory,"root",O_RDONLY|O_DIRECTORY);if(root<0)return 2;char root_option[64];snprintf(root_option,sizeof root_option,"--root=/proc/self/fd/%d",root);
+  close(directory);
+  struct pollfd alive={pinned,POLLIN,0};
+  if(!process_info((pid_t)pid,&after,&parent)||after!=before||poll(&alive,1,0)!=0||interrupted)return 2;
+  close(pinned);
+  char *arguments[argc+12];unsigned count=0;arguments[count++]=argv[at+2];
+  for(unsigned i=0;i<5;i++)arguments[count++]=options[i];
+  arguments[count++]=root_option;arguments[count++]="--wdns=/";arguments[count++]="--preserve-credentials";arguments[count++]="--";
+  for(int i=at+3;i<argc;i++)arguments[count++]=argv[i];
+  arguments[count]=NULL;execv(arguments[0],arguments);return 127;
+}
+/* Resolve every ancestor without symlinks, then publish an owned staged tree
+ * atomically without replacing an existing caller/attempt directory. */
+static int publish_root(const char *source,const char *destination) {
+  char parent[4096];if(strlen(destination)>=sizeof parent||destination[0]!='/')return 2;strcpy(parent,destination);
+  char *name=strrchr(parent,'/');if(!name||name==parent)return 2;*name++=0;
+  int slash=open("/",O_RDONLY|O_DIRECTORY|O_CLOEXEC);if(slash<0)return 2;
+  struct open_how how={.flags=O_RDONLY|O_DIRECTORY|O_CLOEXEC,.resolve=RESOLVE_BENEATH|RESOLVE_NO_SYMLINKS};
+  int dir=(int)syscall(SYS_openat2,slash,parent+1,&how,sizeof how);close(slash);if(dir<0)return 2;
+  int result=(int)syscall(SYS_renameat2,AT_FDCWD,source,dir,name,RENAME_NOREPLACE);close(dir);return result<0?2:0;
+}
+static int mkdir_root(const char *destination) {
+  char parent[4096];if(strlen(destination)>=sizeof parent||destination[0]!='/')return 2;strcpy(parent,destination);
+  char *name=strrchr(parent,'/');if(!name||name==parent)return 2;*name++=0;
+  int slash=open("/",O_RDONLY|O_DIRECTORY|O_CLOEXEC);if(slash<0)return 2;
+  struct open_how how={.flags=O_RDONLY|O_DIRECTORY|O_CLOEXEC,.resolve=RESOLVE_BENEATH|RESOLVE_NO_SYMLINKS};
+  int dir=(int)syscall(SYS_openat2,slash,parent+1,&how,sizeof how);close(slash);if(dir<0)return 2;
+  int result=mkdirat(dir,name,0700);if(result<0&&errno!=EEXIST){close(dir);return 2;}
+  int child=openat(dir,name,O_RDONLY|O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC);close(dir);if(child<0)return 2;
+  struct stat info;result=fstat(child,&info);close(child);return result<0||info.st_uid!=getuid()||(info.st_mode&077)?2:0;
+}
 static int supervise(int argc, char **argv) {
   if (argc < 4 || prctl(PR_SET_CHILD_SUBREAPER, 1) < 0) return 2;
   int lock=lifecycle_lock(argv[2],false);if(lock<0)return 2;
@@ -128,7 +174,7 @@ static int supervise(int argc, char **argv) {
   if (rename(temporary, argv[2]) < 0) return 2;
   if (interrupted) {close(lock);return 0;}
   pid_t child = fork(); if (child < 0) {close(lock);return 2;}
-  if (child == 0) {close(lock);signal(SIGTERM, SIG_DFL); signal(SIGINT, SIG_DFL); if (setsid() < 0) _exit(126); execv(argv[3], &argv[3]); _exit(127); }
+  if(child==0){close(lock);signal(SIGTERM,SIG_DFL);signal(SIGINT,SIG_DFL);if(setsid()<0)_exit(126);if(!strcmp(argv[1],"supervise-ns"))_exit(enter_namespaces(argc,argv,3));execv(argv[3],&argv[3]);_exit(127);}
   close(lock);
   unsigned long long own_start;pid_t own_parent;if(!process_info(getpid(),&own_start,&own_parent))return 2;
   /* Stay alive after an initial launcher exits while an adopted daemon lives. */
@@ -186,7 +232,11 @@ static void release_keys(void) {
   modifiers_down = 0;
   zwp_virtual_keyboard_v1_modifiers(keyboard, 0, 0, 0, 0);
 }
-static int send_key(const char *symbol, unsigned requested_modifiers) {
+static bool peer_live(FILE *connection) {
+  struct pollfd peer={fileno(connection),POLLRDHUP|POLLHUP|POLLERR,0};
+  return !interrupted&&poll(&peer,1,0)>=0&&!(peer.revents&(POLLRDHUP|POLLHUP|POLLERR|POLLNVAL));
+}
+static int send_key(FILE *connection,const char *symbol,unsigned requested_modifiers) {
   if (requested_modifiers > 15) return 2;
   xkb_keysym_t keysym = xkb_keysym_from_name(symbol, XKB_KEYSYM_NO_FLAGS);
   if (keysym == XKB_KEY_NoSymbol) return 2;
@@ -238,6 +288,7 @@ static int send_key(const char *symbol, unsigned requested_modifiers) {
     entry.code = 30;
   } else return 2;
   requested_modifiers |= entry.modifiers;
+  if(!peer_live(connection))return 2;
   uint32_t depressed = 0;
   for (unsigned i = 0; i < 4; i++) if (requested_modifiers & (1u << i)) {
     zwp_virtual_keyboard_v1_key(keyboard, clock_ms(), modifier_keys[i], WL_KEYBOARD_KEY_STATE_PRESSED);
@@ -251,9 +302,8 @@ static int send_key(const char *symbol, unsigned requested_modifiers) {
   return wl_display_roundtrip(display) < 0 ? 2 : 0;
 }
 static int text(FILE *connection, size_t remaining) {
-  struct pollfd peer={fileno(connection),POLLRDHUP|POLLHUP|POLLERR,0};
   while (remaining && !interrupted) {
-    if(poll(&peer,1,0)<0||peer.revents&(POLLRDHUP|POLLHUP|POLLERR))return 2;
+    if(!peer_live(connection))return 2;
     int first = fgetc(connection); remaining--;
     if (first <= 0) return 2;
     uint32_t scalar, minimum; unsigned extra;
@@ -271,22 +321,21 @@ static int text(FILE *connection, size_t remaining) {
     if (scalar < minimum || scalar > 0x10ffff || (scalar >= 0xd800 && scalar <= 0xdfff)) return 2;
     char symbol[24]; snprintf(symbol, sizeof symbol, "U%04X", scalar);
     const char *key = scalar == '\n' ? "Return" : scalar == '\t' ? "Tab" : symbol;
-    if(poll(&peer,1,0)<0||peer.revents&(POLLRDHUP|POLLHUP|POLLERR))return 2;
-    if (send_key(key, 0)) return 2;
+    if(!peer_live(connection)||send_key(connection,key,0))return 2;
   }
   return interrupted ? 2 : 0;
 }
 static int request(FILE *connection) {
   char header[128], symbol[32]; unsigned mask, x, y, width, height, click;
-  if (!fgets(header, sizeof header, connection)) return 2;
-  int result = 2;
-  if (sscanf(header, "K %u %31s", &mask, symbol) == 2) result = send_key(symbol, mask);
+  int result=2;
+  if(!fgets(header,sizeof header,connection)||!peer_live(connection))goto release;
+  if(sscanf(header,"K %u %31s",&mask,symbol)==2)result=send_key(connection,symbol,mask);
   else if (sscanf(header, "P %u %u %u %u %u", &x, &y, &width, &height, &click) == 5 && width && height && x < width && y < height && click <= 1) {
     zwlr_virtual_pointer_v1_motion_absolute(pointer, clock_ms(), x, y, width, height); zwlr_virtual_pointer_v1_frame(pointer);
-    if (wl_display_roundtrip(display) < 0) return 2;
-    if (click) {
+    if(wl_display_roundtrip(display)<0)goto release;
+    if(click&&peer_live(connection)) {
       zwlr_virtual_pointer_v1_button(pointer, clock_ms(), 0x110, WL_POINTER_BUTTON_STATE_PRESSED); pointer_down = true; zwlr_virtual_pointer_v1_frame(pointer);
-      if (wl_display_roundtrip(display) < 0) return 2;
+      if(wl_display_roundtrip(display)<0)goto release;
       zwlr_virtual_pointer_v1_button(pointer, clock_ms(), 0x110, WL_POINTER_BUTTON_STATE_RELEASED); pointer_down = false; zwlr_virtual_pointer_v1_frame(pointer);
     }
     result = wl_display_roundtrip(display) < 0 ? 2 : 0;
@@ -294,6 +343,7 @@ static int request(FILE *connection) {
     size_t size;
     if (sscanf(header, "T %zu", &size) == 1 && size <= 4 * 1024 * 1024) result = text(connection, size);
   }
+release:
   release_keys();
   if (pointer_down) { zwlr_virtual_pointer_v1_button(pointer, clock_ms(), 0x110, WL_POINTER_BUTTON_STATE_RELEASED); pointer_down = false; zwlr_virtual_pointer_v1_frame(pointer); }
   if (wl_display_roundtrip(display) < 0) result = 2;
@@ -320,7 +370,10 @@ static int stop_owned(const char *pid_text, const char *expected_start) {
 int main(int argc, char **argv) {
   struct sigaction action = { .sa_handler = interrupt }; sigemptyset(&action.sa_mask);
   sigaction(SIGTERM, &action, NULL); sigaction(SIGINT, &action, NULL); signal(SIGPIPE, SIG_IGN);
-  if (argc > 1 && strcmp(argv[1], "supervise") == 0) return supervise(argc, argv);
+  if(argc>1&&(!strcmp(argv[1],"supervise")||!strcmp(argv[1],"supervise-ns")))return supervise(argc,argv);
+  if(argc>1&&!strcmp(argv[1],"enter-ns"))return enter_namespaces(argc,argv,2);
+  if(argc==4&&!strcmp(argv[1],"publish-root"))return publish_root(argv[2],argv[3]);
+  if(argc==3&&!strcmp(argv[1],"mkdir-root"))return mkdir_root(argv[2]);
   if(argc==3&&strcmp(argv[1],"close")==0){int lock=lifecycle_lock(argv[2],true);if(lock<0)return 2;close(lock);return 0;}
   if (argc == 4 && strcmp(argv[1], "stop") == 0) return stop_owned(argv[2], argv[3]);
   if (argc != 4 || strcmp(argv[1], "serve") != 0 || !getenv("XDG_RUNTIME_DIR") || !getenv("WAYLAND_DISPLAY")) return 2;

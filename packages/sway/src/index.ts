@@ -16,8 +16,11 @@ const exec = promisify(execFile);
 export interface OwnedWaylandParent {
   readonly runtimeDir: string;
   readonly waylandDisplay: string;
+  /** Concrete owned guest context; input helper pins namespace/root FDs before entry. */
+  readonly guest?:{readonly target:ProcessIdentity;readonly nsenter:string};
   /** The parent owns silent placement policy; no uncontained direct host spawn. */
   launch(binary: string, args: readonly string[], env: Readonly<Record<string, string>>, identityFile: string, signal: AbortSignal): Promise<ProcessIdentity>;
+  recover?(identityFile:string,signal:AbortSignal):Promise<ProcessIdentity|undefined>;
   guard?(signal: AbortSignal): Promise<() => Promise<void>>;
 }
 export interface SwayOptions {
@@ -27,6 +30,8 @@ export interface SwayOptions {
   readonly root?: string;
   /** Host-private cleanup authority; never bind this directory or an ancestor into a guest. */
   readonly journalRoot?: string;
+  /** Host-created Sway configuration, exposed read-only to a guest if present. */
+  readonly configurationRoot?:string;
   readonly parent?: OwnedWaylandParent;
 }
 export interface SwayDisplay {
@@ -35,6 +40,7 @@ export interface SwayDisplay {
   readonly output: string;
   readonly env: Readonly<Record<string, string>>;
   readonly directory: string;
+  readonly controlBinary:string;
   readonly nativeClient: ProcessIdentity | undefined;
   tap(x: number, y: number, signal: AbortSignal): Promise<void>;
   spawn(binary: string, args: readonly string[], signal: AbortSignal): Promise<ProcessIdentity>;
@@ -45,7 +51,7 @@ export interface SwayDisplay {
   capture(signal: AbortSignal): Promise<Buffer>;
   release(context: EngineCleanupContext): Promise<void>;
 }
-interface LeaseRecord { version: 1; runId: string; targetName: string; directory: string; journalDirectory: string; processes: ProcessIdentity[] }
+interface LeaseRecord { version: 1; runId: string; targetName: string; directory: string; journalDirectory: string; processes: ProcessIdentity[]; parentPending?:string; configPath?:string; runtimeIdentity?:{dev:number;ino:number} }
 interface Container { id: number; pid?: number | null; rect: { x: number; y: number; width: number; height: number }; nodes?: Container[]; floating_nodes?: Container[] }
 interface Seat { name: string; focus: number }
 const keyNames: Readonly<Record<string, string>> = { Enter: 'Return', Escape: 'Escape', Tab: 'Tab', Backspace: 'BackSpace', Delete: 'Delete', Insert: 'Insert', Space: 'space', ArrowUp: 'Up', ArrowDown: 'Down', ArrowLeft: 'Left', ArrowRight: 'Right', Home: 'Home', End: 'End', PageUp: 'Prior', PageDown: 'Next', F1: 'F1', F2: 'F2', F3: 'F3', F4: 'F4', F5: 'F5', F6: 'F6', F7: 'F7', F8: 'F8', F9: 'F9', F10: 'F10', F11: 'F11', F12: 'F12' };
@@ -76,14 +82,13 @@ async function recordedProcesses(directory: string, processes: readonly ProcessI
 export async function swayDisplay(options: SwayOptions, request: TernRequest): Promise<SwayDisplay> {
   if (process.platform !== 'linux') throw new ConfigurationError('INVALID_CONFIG', 'Sway requires Linux');
   for (const binary of Object.values(options.binaries)) if (!isAbsolute(binary)) throw new ConfigurationError('INVALID_CONFIG', 'Native binaries must be explicit absolute pinned paths');
+  if(options.parent?.guest&&(!isAbsolute(options.parent.guest.nsenter)||!options.journalRoot||!options.configurationRoot||!isAbsolute(options.configurationRoot)))throw new ConfigurationError('INVALID_CONFIG','Guest execution requires explicit absolute nsenter, host-private journals and read-only configuration root');
   const size = options.size ?? { width: 1280, height: 900 };
   if (![size.width, size.height].every(value => Number.isInteger(value) && value >= 320 && value <= 8192)) throw new ConfigurationError('INVALID_CONFIG', 'Invalid isolated display size');
   const root = runDirectory(options, request.runId, request.targetName);
   if (!isAbsolute(root) || Buffer.byteLength(root) > 48) throw new ConfigurationError('INVALID_CONFIG', 'Native lease root exceeds Unix socket path limits');
-  await mkdir(dirname(root), { recursive: true, mode: 0o700 });
-  await ownedDirectory(dirname(root));
-  await mkdir(root, { recursive: true, mode: 0o700 });
-  await ownedDirectory(root);
+  if(options.parent?.guest){await exec(options.binaries.input,['mkdir-root',root],{signal:request.signal,timeout:5000});}
+  else{await mkdir(dirname(root),{recursive:true,mode:0o700});await ownedDirectory(dirname(root));await mkdir(root,{recursive:true,mode:0o700});await ownedDirectory(root);}
   const journalRoot=journalRunDirectory(options,request.runId,request.targetName);
   await mkdir(journalRoot,{recursive:true,mode:0o700});await ownedDirectory(journalRoot);
   const journalDirectory=await mkdtemp(join(journalRoot,'attempt-'));
@@ -91,22 +96,31 @@ export async function swayDisplay(options: SwayOptions, request: TernRequest): P
   const record: LeaseRecord = { version: 1, runId: request.runId, targetName: request.targetName, directory, journalDirectory, processes: [] };
   const save = async () => {await writeFile(join(journalDirectory,'lease.next'),JSON.stringify(record),{mode:0o600});await rename(join(journalDirectory,'lease.next'),join(journalDirectory,'lease.json'));};
   await save();
-  try{if(directory!==journalDirectory)await mkdir(directory,{mode:0o700});for (const name of ['run', 'home', 'config', 'cache', 'state']) await mkdir(join(directory, name), { mode: 0o700 });}
-  catch(error){await removeRuntime(directory);if(directory!==journalDirectory)await rm(journalDirectory,{recursive:true});throw error;}
+  const stage=directory===journalDirectory?directory:join(journalDirectory,'runtime');
+  try{if(stage!==journalDirectory)await mkdir(stage,{mode:0o700});for(const name of ['run','home','config','cache','state'])await mkdir(join(stage,name),{mode:0o700});const info=await lstat(stage);record.runtimeIdentity={dev:info.dev,ino:info.ino};await save();}
+  catch(error){await rm(journalDirectory,{recursive:true});throw error;}
+  const ownsRuntime=async()=>{try{const info=await lstat(directory);return info.isDirectory()&&info.dev===record.runtimeIdentity?.dev&&info.ino===record.runtimeIdentity?.ino;}catch(error){if((error as NodeJS.ErrnoException).code==='ENOENT')return false;throw error;}};
   const seat = `agent-${createHash('sha256').update(directory).digest('hex').slice(0, 12)}`;
   const output = options.parent ? 'WL-1' : 'HEADLESS-1';
   const env: Record<string, string> = { PATH: request.env.PATH ?? '/usr/bin:/bin', LANG: 'C.UTF-8', ...options.env,
     HOME: join(directory, 'home'), XDG_CONFIG_HOME: join(directory, 'config'), XDG_CACHE_HOME: join(directory, 'cache'), XDG_STATE_HOME: join(directory, 'state'), XDG_RUNTIME_DIR: join(directory, 'run'),
     WLR_BACKENDS: options.parent ? 'wayland' : 'headless', WLR_RENDERER: 'pixman', WLR_HEADLESS_OUTPUTS: '1', WLR_WL_OUTPUTS: '1',
     TERN_CONFIG_DIR: join(directory, 'config', 'tern'), SHELL: '/bin/bash' };
-  const config = join(directory, 'sway.conf');
-  try{await writeFile(config, `output ${output} mode ${size.width}x${size.height}\noutput ${output} scale 1\ndefault_border none\nxwayland disable\nseat ${seat} fallback true\nseat ${seat} attach "*"\nfocus_follows_mouse yes\n`, { mode: 0o600 });}
-  catch(error){await removeRuntime(directory);if(directory!==journalDirectory)await rm(journalDirectory,{recursive:true});throw error;}
+  const configRoot=options.configurationRoot??journalDirectory;await ownedDirectory(configRoot);
+  const config=join(configRoot,`sway-${randomUUID()}.conf`);record.configPath=config;await save();
+  try{await writeFile(config,`output ${output} mode ${size.width}x${size.height}\noutput ${output} scale 1\ndefault_border none\nxwayland disable\nseat ${seat} fallback true\nseat ${seat} attach "*"\nfocus_follows_mouse yes\n`,{mode:0o600,flag:'wx'});}
+  catch(error){await rm(journalDirectory,{recursive:true});throw error;}
+  const guest=options.parent?.guest,ns=guest?[String(guest.target.pid),guest.target.start,guest.nsenter]:undefined;
+  const quote=(value:string)=>`'${value.replaceAll("'","'\\''")}'`;
+  const controlBinary=ns?join(journalDirectory,'native-ctl'):options.binaries.tern;
+  if(ns)await writeFile(controlBinary,`#!/bin/sh\nexec ${[options.binaries.input,'enter-ns',...ns,options.binaries.tern].map(quote).join(' ')} "$@"\n`,{mode:0o700,flag:'wx'});
+  const routed=(binary:string,args:readonly string[])=>ns?{binary:options.binaries.input,args:['enter-ns',...ns,binary,...args]}:{binary,args:[...args]};
   const children: ChildProcess[] = [];
   const launch = async (binary: string, args: readonly string[], signal: AbortSignal): Promise<ProcessIdentity> => {
     signal.throwIfAborted();
     const identityFile = join(journalDirectory, `process-${randomUUID()}.json`);
-    const child = spawn(options.binaries.input, ['supervise', identityFile, binary, ...args], { env, detached: true, stdio: 'ignore' });
+    const command=ns?['supervise-ns',identityFile,...ns,binary,...args]:['supervise',identityFile,binary,...args];
+    const child=spawn(options.binaries.input,command,{env,detached:true,stdio:'ignore'});
     children.push(child);
     const identity = await new Promise<ProcessIdentity>((accept, reject) => {
       child.once('error', reject);
@@ -120,18 +134,23 @@ export async function swayDisplay(options: SwayOptions, request: TernRequest): P
   const release = async (context: EngineCleanupContext): Promise<void> => {
     if (released) return;
     await closePublication(journalDirectory,options.binaries.input,context);
-    if(directory!==journalDirectory){try{await ownedDirectory(directory);await closePublication(directory,options.binaries.input,context);}catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;}}
+    const runtimeOwned=await ownsRuntime();
+    if(directory!==journalDirectory&&runtimeOwned){const command=routed(options.binaries.input,['close',join(directory,'lease.json')]);await exec(command.binary,command.args,{signal:context.signal,timeout:context.timeoutMs});}
+    if(record.parentPending){const identity=await options.parent?.recover?.(record.parentPending,context.signal);if(!identity)throw new EngineError('INVALID_STATE','Pending parent launch lacks authenticated cleanup authority; retain runtime and receipt',{retryable:false});record.processes.push(identity);delete record.parentPending;await save();}
     for (const identity of (await recordedProcesses(journalDirectory, record.processes)).toReversed()) await stop(identity, context, options.binaries.input);
     for (const child of children) child.unref();
-    await removeRuntime(directory);if(directory!==journalDirectory)await rm(journalDirectory,{recursive:true,force:true});
+    if(runtimeOwned){if(ns){const cleanup=routed('/usr/bin/rm',['--recursive','--force','--one-file-system','--',directory]);await exec(cleanup.binary,cleanup.args,{signal:context.signal,timeout:context.timeoutMs});}else await removeRuntime(directory);}
+    if(record.configPath)await rm(record.configPath,{force:true});if(directory!==journalDirectory)await rm(journalDirectory,{recursive:true,force:true});
     released = true;
   };
   try {
+    if(stage!==directory)await exec(options.binaries.input,['publish-root',stage,directory],{signal:request.signal,timeout:5000});
     if (options.parent) {
       const parentEnv = { ...env, WAYLAND_DISPLAY: join(options.parent.runtimeDir, options.parent.waylandDisplay) };
       const identityFile = join(directory, `launch-${randomUUID()}.json`);
+      record.parentPending=identityFile;await save();
       const identity = await options.parent.launch(options.binaries.input, ['supervise', identityFile, options.binaries.sway, '--config', config], parentEnv, identityFile, request.signal);
-      record.processes.push(identity); await save();
+      record.processes.push(identity);delete record.parentPending;await save();
     } else await launch(options.binaries.sway, ['--config', config], request.signal);
     let socket = '';
     const deadline = Date.now() + 15000;
@@ -144,7 +163,8 @@ export async function swayDisplay(options: SwayOptions, request: TernRequest): P
     }
     env.SWAYSOCK = join(env.XDG_RUNTIME_DIR!, socket);
     const ipc = async <T>(type: string, signal: AbortSignal): Promise<T> => {
-      const { stdout } = await exec(options.binaries.swaymsg, ['--socket', env.SWAYSOCK!, '--type', type, '--raw'], { env, signal, timeout: 5000, maxBuffer: 8 * 1024 * 1024 });
+      const command=routed(options.binaries.swaymsg,['--socket',env.SWAYSOCK!,'--type',type,'--raw']);
+      const {stdout}=await exec(command.binary,command.args,{env,signal,timeout:5000,maxBuffer:8*1024*1024});
       return JSON.parse(stdout) as T;
     };
     const outputs = await ipc<Array<{ name: string; active: boolean; rect: { width: number; height: number }; scale: number }>>('get_outputs', request.signal);
@@ -202,7 +222,7 @@ export async function swayDisplay(options: SwayOptions, request: TernRequest): P
       if (![x, y].every(Number.isFinite) || x < 0 || y < 0 || x >= size.width || y >= size.height) throw new EngineError('NOT_ACTIONABLE', 'Pointer is outside the isolated output', { retryable: false });
       await input(`P ${Math.floor(x)} ${Math.floor(y)} ${size.width} ${size.height} ${button ? 1 : 0}\n`, '', signal);
     };
-    return { id: directory, directory, seat, output, env, spawn: launch, release, pointer,
+    return { id: directory, directory, controlBinary, seat, output, env, spawn: launch, release, pointer,
       get nativeClient() { return clientIdentity; },
       async tap(x, y, signal) { await assertFocus(signal); await pointer(client!.rect.x+x, client!.rect.y+y, true, signal); },
       async focusClient(pid, signal) {
@@ -227,7 +247,7 @@ export async function swayDisplay(options: SwayOptions, request: TernRequest): P
         const mask = parsed.modifiers.reduce((value, name) => value | modifiers[name]!, 0);
         await input(`K ${mask} ${symbol}\n`, '', signal);
       },
-      async capture(signal) { const result = await exec(options.binaries.grim, ['-o', output, '-'], { env, signal, timeout: 5000, encoding: 'buffer', maxBuffer: 64 * 1024 * 1024 }); return result.stdout; },
+      async capture(signal){const command=routed(options.binaries.grim,['-o',output,'-']);const result=await exec(command.binary,command.args,{env,signal,timeout:5000,encoding:'buffer',maxBuffer:64*1024*1024});return result.stdout;},
     };
   } catch (error) {
     await release({ signal: AbortSignal.timeout(15000), timeoutMs: 15000 } as EngineCleanupContext);
@@ -244,14 +264,14 @@ export function sway(options: SwayOptions): TernProvider {
       displays.set(display.id, display);
       try {
         const control = join(display.directory, 'control.sock');
-        const checkGate=async(signal:AbortSignal)=>{signal.throwIfAborted();const result=await exec(options.binaries.tern,['ctl','--control',control,'state'],{env:display.env,signal,timeout:5000,maxBuffer:8*1024*1024});const gateState=JSON.parse(result.stdout) as Record<string,unknown>;if(gateState.ok!==true)throw new EngineError('ENGINE_FAILURE','Native gate inspection failed',{retryable:false});requireNativeGate(gateState);};
+        const checkGate=async(signal:AbortSignal)=>{signal.throwIfAborted();const result=await exec(display.controlBinary,['ctl','--control',control,'state'],{env:display.env,signal,timeout:5000,maxBuffer:8*1024*1024});const gateState=JSON.parse(result.stdout) as Record<string,unknown>;if(gateState.ok!==true)throw new EngineError('ENGINE_FAILURE','Native gate inspection failed',{retryable:false});requireNativeGate(gateState);};
         const supervisor = await display.spawn(options.binaries.tern, ['--control', control], request.signal);
         const deadline = Date.now() + 15000;
         let state: { ok: boolean; panes: unknown[]; focused: { id: string } } | undefined;
         while (!state) {
           request.signal.throwIfAborted();
           if (Date.now() >= deadline) throw new EngineError('ENGINE_FAILURE', 'Owned native Tern did not become ready', { retryable: false });
-          try { const result = await exec(options.binaries.tern, ['ctl', '--control', control, 'state'], { env: display.env, signal: request.signal, timeout: 1000 }); state = JSON.parse(result.stdout) as typeof state; }
+          try { const result = await exec(display.controlBinary, ['ctl', '--control', control, 'state'], { env: display.env, signal: request.signal, timeout: 1000 }); state = JSON.parse(result.stdout) as typeof state; }
           catch { await delay(50, undefined, { signal: request.signal }); }
         }
         if (!state.ok || state.panes.length !== 1 || !['number', 'string'].includes(typeof state.focused?.id)) throw new EngineError('NOT_ACTIONABLE', 'Owned Tern must expose exactly one native pane', { retryable: false });
@@ -266,14 +286,14 @@ export function sway(options: SwayOptions): TernProvider {
         if (!focused) throw new EngineError('NOT_ACTIONABLE', 'Owned Tern native client is not a supervisor child', { retryable: false });
         if (!request.app.appPath) throw new ConfigurationError('INVALID_CONFIG', 'Owned Tern needs app.appPath');
         try {
-          const ready = await exec(options.binaries.tern, ['ctl', '--control', control, 'ready'], { env: display.env, signal: request.signal, timeout: 25000 });
+          const ready = await exec(display.controlBinary, ['ctl', '--control', control, 'ready'], { env: display.env, signal: request.signal, timeout: 25000 });
           if (!(JSON.parse(ready.stdout) as { ok?: boolean }).ok) throw new Error('Shell not ready');
         } catch { throw new EngineError('ENGINE_FAILURE', 'Owned native shell did not become ready', { retryable: false }); }
         await checkGate(request.signal);
         const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
         const command = [resolve(request.projectRoot, request.app.appPath), ...request.app.launchArguments ?? []].map(quote).join(' ');
         try {
-          const result = await exec(options.binaries.tern, ['ctl', '--control', control, `run ${JSON.stringify(command)}`], { env: display.env, signal: request.signal, timeout: 25000 });
+          const result = await exec(display.controlBinary, ['ctl', '--control', control, `run ${JSON.stringify(command)}`], { env: display.env, signal: request.signal, timeout: 25000 });
           if (!(JSON.parse(result.stdout) as { ok?: boolean }).ok) throw new Error('Launch not acknowledged');
         } catch { throw new EngineError('ACTION_MAY_HAVE_COMMITTED', 'Owned app launch did not settle', { retryable: false }); }
         await checkGate(request.signal);
@@ -287,7 +307,7 @@ export function sway(options: SwayOptions): TernProvider {
           return async()=>{if(!await stillOwned(client))throw new EngineError('ACTION_MAY_HAVE_COMMITTED','Owned native client exited across the operation',{retryable:false});await checkGate(signal);await after?.();};
         };
         const guarded=async<T>(signal:AbortSignal,operation:()=>Promise<T>)=>{const after=await guard(signal);try{return await operation();}finally{await after();}};
-        return{id:display.id,pane:String(state.focused.id),mode:'native',control,binary:options.binaries.tern,env:display.env,client:display.nativeClient,
+        return{id:display.id,pane:String(state.focused.id),mode:'native',control,binary:display.controlBinary,env:display.env,client:display.nativeClient,
           capture:signal=>guarded(signal,()=>display.capture(signal)),guard,input:{
             type:(text,signal)=>guarded(signal,()=>display.type(text,signal)),
             press:(key,signal)=>guarded(signal,()=>display.press(key,signal)),
@@ -310,13 +330,19 @@ export function sway(options: SwayOptions): TernProvider {
         catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;await rm(journalDirectory,{recursive:true});continue;}
         const runtimeDirectory=join(runDirectory(options,request.runId,request.targetName),name);
         if (record.version !== 1 || record.runId !== request.runId || record.targetName !== request.targetName || record.journalDirectory !== journalDirectory||record.directory!==runtimeDirectory) throw new EngineError('INVALID_STATE', 'Refusing unowned native cleanup record', { retryable: false });
-        if(record.directory!==journalDirectory){try{await ownedDirectory(record.directory);await closePublication(record.directory,options.binaries.input,context);}catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;}}
-        for (const identity of (await recordedProcesses(journalDirectory, record.processes)).toReversed()) await stop(identity, context, options.binaries.input);
-        await removeRuntime(record.directory);if(record.directory!==journalDirectory)await rm(journalDirectory,{recursive:true});
+        const guest=options.parent?.guest,ns=guest?[String(guest.target.pid),guest.target.start,guest.nsenter]:undefined;
+        const routed=(binary:string,args:string[])=>ns?{binary:options.binaries.input,args:['enter-ns',...ns,binary,...args]}:{binary,args};
+        let runtimeOwned=false;try{const info=await lstat(record.directory);runtimeOwned=info.isDirectory()&&info.dev===record.runtimeIdentity?.dev&&info.ino===record.runtimeIdentity?.ino;}catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;}
+        if(record.directory!==journalDirectory&&runtimeOwned){const command=routed(options.binaries.input,['close',join(record.directory,'lease.json')]);await exec(command.binary,command.args,{signal:context.signal,timeout:context.timeoutMs});}
+        if(record.parentPending){const identity=await options.parent?.recover?.(record.parentPending,context.signal);if(!identity)throw new EngineError('INVALID_STATE','Pending parent launch lacks authenticated cleanup authority; retain runtime and receipt',{retryable:false});record.processes.push(identity);delete record.parentPending;await writeFile(join(journalDirectory,'lease.next'),JSON.stringify(record),{mode:0o600});await rename(join(journalDirectory,'lease.next'),join(journalDirectory,'lease.json'));}
+        for(const identity of(await recordedProcesses(journalDirectory,record.processes)).toReversed())await stop(identity,context,options.binaries.input);
+        if(runtimeOwned){if(ns){const command=routed('/usr/bin/rm',['--recursive','--force','--one-file-system','--',record.directory]);await exec(command.binary,command.args,{signal:context.signal,timeout:context.timeoutMs});}else await removeRuntime(record.directory);}
+        if(record.configPath){const configRoot=options.configurationRoot??journalDirectory;if(dirname(record.configPath)!==configRoot||!/^sway-[a-f0-9-]+\.conf$/.test(basename(record.configPath)))throw new EngineError('INVALID_STATE','Unowned native configuration path',{retryable:false});await rm(record.configPath,{force:true});}
+        if(record.directory!==journalDirectory)await rm(journalDirectory,{recursive:true});
       }
       await rmdir(root);
       const runtimeRoot=runDirectory(options,request.runId,request.targetName);
-      if(runtimeRoot!==root){try{await ownedDirectory(runtimeRoot);await rmdir(runtimeRoot);}catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;}}
+      if(runtimeRoot!==root){try{await ownedDirectory(runtimeRoot);const guest=options.parent?.guest;if(guest)await exec(options.binaries.input,['enter-ns',String(guest.target.pid),guest.target.start,guest.nsenter,'/usr/bin/rmdir','--',runtimeRoot],{signal:context.signal,timeout:context.timeoutMs});else await rmdir(runtimeRoot);}catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;}}
     },
   };
 }
