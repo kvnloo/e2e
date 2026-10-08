@@ -154,7 +154,7 @@ function resource(options: HyprlandOptions, record: Record) {
       await verify(signal,true); await log('launch',before,await proof(signal)); return record.child!;
     }
   };
-  const provider=sway({...options.sway,root:record.childRoot,journalRoot:join(record.directory,'sway-journals'),configurationRoot:options.guest?.configurationRoot,parent});
+  const provider=sway({...options.sway,root:record.childRoot,journalRoot:join(record.directory,'sway-journals'),...(options.guest?{configurationRoot:options.guest.configurationRoot}:{}),parent});
   const close = async(context: EngineCleanupContext, lease?: TernLease) => {
     const signal=context.signal, before=await proof(signal);
     await closeDispatch(signal,context.timeoutMs);
