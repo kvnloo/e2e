@@ -140,13 +140,16 @@ static int enter_namespaces(int argc,char **argv,int at) {
 }
 /* Resolve every ancestor without symlinks, then publish an owned staged tree
  * atomically without replacing an existing caller/attempt directory. */
-static int publish_root(const char *source,const char *destination) {
-  char parent[4096];if(strlen(destination)>=sizeof parent||destination[0]!='/')return 2;strcpy(parent,destination);
-  char *name=strrchr(parent,'/');if(!name||name==parent)return 2;*name++=0;
-  int slash=open("/",O_RDONLY|O_DIRECTORY|O_CLOEXEC);if(slash<0)return 2;
+static int publish_root(const char *source,const char *destination,const char *fence) {
+  int lock=-1;
+  if(fence){if(fence[0]!='/')return 2;lock=lifecycle_lock(fence,false);if(lock<0)return 2;if(interrupted){close(lock);return 2;}}
+  char parent[4096];if(strlen(destination)>=sizeof parent||destination[0]!='/'){if(lock>=0)close(lock);return 2;}strcpy(parent,destination);
+  char *name=strrchr(parent,'/');if(!name||name==parent){if(lock>=0)close(lock);return 2;}*name++=0;
+  int slash=open("/",O_RDONLY|O_DIRECTORY|O_CLOEXEC);if(slash<0){if(lock>=0)close(lock);return 2;}
   struct open_how how={.flags=O_RDONLY|O_DIRECTORY|O_CLOEXEC,.resolve=RESOLVE_BENEATH|RESOLVE_NO_SYMLINKS};
-  int dir=(int)syscall(SYS_openat2,slash,parent+1,&how,sizeof how);close(slash);if(dir<0)return 2;
-  int result=(int)syscall(SYS_renameat2,AT_FDCWD,source,dir,name,RENAME_NOREPLACE);close(dir);return result<0?2:0;
+  int dir=(int)syscall(SYS_openat2,slash,parent+1,&how,sizeof how);close(slash);if(dir<0){if(lock>=0)close(lock);return 2;}
+  int result=(int)syscall(SYS_renameat2,AT_FDCWD,source,dir,name,RENAME_NOREPLACE);close(dir);
+  if(lock>=0)close(lock);return result<0?2:0;
 }
 static int mkdir_root(const char *destination) {
   char parent[4096];if(strlen(destination)>=sizeof parent||destination[0]!='/')return 2;strcpy(parent,destination);
@@ -541,7 +544,8 @@ int main(int argc, char **argv) {
   }
   if(argc>1&&(!strcmp(argv[1],"supervise")||!strcmp(argv[1],"supervise-ns")))return supervise(argc,argv);
   if(argc>1&&!strcmp(argv[1],"enter-ns"))return enter_namespaces(argc,argv,2);
-  if(argc==4&&!strcmp(argv[1],"publish-root"))return publish_root(argv[2],argv[3]);
+  if(argc==4&&!strcmp(argv[1],"publish-root"))return publish_root(argv[2],argv[3],NULL);
+  if(argc==5&&!strcmp(argv[1],"publish-root"))return publish_root(argv[2],argv[3],argv[4]);
   if(argc==3&&!strcmp(argv[1],"mkdir-root"))return mkdir_root(argv[2]);
   if(argc==3&&strcmp(argv[1],"close")==0){int lock=lifecycle_lock(argv[2],true);if(lock<0)return 2;close(lock);return 0;}
   if (argc == 4 && strcmp(argv[1], "stop") == 0) return stop_owned(argv[2], argv[3]);
