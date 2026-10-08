@@ -44,7 +44,7 @@ test('a stale target generation cannot enter any namespace or dispatch its progr
 test('closed private dispatch fence rejects a real Node child with no receipt or effect',async()=>{
  const directory=await mkdtemp('/tmp/e2e-authority-');try{
   const receipt=join(directory,'dispatch.json'),effect=join(directory,'effect'),writer=join(directory,'writer.mjs');
-  await writeFile(writer,`import {writeFileSync} from 'node:fs'; writeFileSync(process.argv[1],'launched'); console.log('ok');\n`,{mode:0o700});
+  await writeFile(writer,`import {writeFileSync} from 'node:fs'; writeFileSync(process.argv[2],'launched'); console.log('ok');\n`,{mode:0o700});
   await exec(binary,['close',receipt]);
   await assert.rejects(exec(binary,['dispatch-owned',receipt,process.execPath,writer,effect]),{code:2});
   await assert.rejects(lstat(receipt),{code:'ENOENT'});
@@ -73,7 +73,7 @@ test('timed-out dispatch-owned reaps the exact delayed child and writes no effec
   assert(sentinel.pid&&sentinel.pid>0);
   const receipt=join(directory,'dispatch.json'),identity=join(directory,'child.json'),effect=join(directory,'effect'),writer=join(directory,'writer.mjs');
   // Real child delay: fake timers cannot reach the exec'd Node; the helper bound must win before the write.
-  await writeFile(writer,`import {writeFileSync} from 'node:fs'; writeFileSync(process.argv[1],JSON.stringify({pid:process.pid})); await new Promise(resolve=>setTimeout(resolve,30000)); writeFileSync(process.argv[2],'launched');\n`,{mode:0o700});
+  await writeFile(writer,`import {writeFileSync} from 'node:fs'; writeFileSync(process.argv[2],JSON.stringify({pid:process.pid})); await new Promise(resolve=>setTimeout(resolve,30000)); writeFileSync(process.argv[3],'launched');\n`,{mode:0o700});
   const failure=await exec(binary,['dispatch-owned',receipt,process.execPath,writer,identity,effect],{timeout:1000}).then(()=>undefined,error=>error as NodeJS.ErrnoException&{stdout?:string});
   assert(failure);
   assert.notEqual(failure.code,0);
@@ -82,7 +82,7 @@ test('timed-out dispatch-owned reaps the exact delayed child and writes no effec
   assert(Number.isSafeInteger(published.pid)&&published.pid>0);
   const child=JSON.parse(await readFile(identity,'utf8')) as {pid:number};
   assert(Number.isSafeInteger(child.pid)&&child.pid>0&&child.pid!==sentinel.pid);
-  await assert.rejects(()=>{process.kill(child.pid,0);},{code:'ESRCH'});
+  assert.throws(()=>{process.kill(child.pid,0);},{code:'ESRCH'});
   process.kill(sentinel.pid,0);
  }finally{sentinel.kill('SIGKILL');await rm(directory,{recursive:true});}
 });
