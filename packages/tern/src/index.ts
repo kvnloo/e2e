@@ -4,7 +4,7 @@ import {
   ConfigurationError, defineEngine, EngineError, parseKey, resolveExpression,
   type EngineHandle, type EngineInitInfo, type EngineCleanupContext, type OperationContext, type NodeRef, type LocatorAction, type SemanticNode,
 } from 'e2e/engine';
-import { control, capture } from './control.ts';
+import { control, capture, requireNativeState } from './control.ts';
 import { actionSelector, flatten, focusedEditable, semanticTree, type NativeAx, type NativeDump, type NativeElement } from './tree.ts';
 import type { TernLease, TernProvider, TernRequest } from './provider.ts';
 import { toolCards } from './tsp.ts';
@@ -164,9 +164,13 @@ export function ternEngine({ provider }: TernOptions): EngineHandle {
         switch (action.kind) {
           case 'tap':
             if (current.input?.tap) {
+              requireNativeState(await control(current,'state',context),current.pane);
+              void context.timeoutMs;
               const rect = hit.node.rect!;
-              try { await current.input.tap(rect.x + rect.width / 2, rect.y + rect.height / 2, context.signal); }
-              catch { throw new EngineError('ACTION_MAY_HAVE_COMMITTED', 'Compositor pointer delivery is uncertain', { retryable: false }); }
+              try {
+                await current.input.tap(rect.x + rect.width / 2, rect.y + rect.height / 2, context.signal);
+                requireNativeState(await control(current,'state',context),current.pane);
+              } catch { throw new EngineError('ACTION_MAY_HAVE_COMMITTED', 'Compositor pointer delivery is uncertain', { retryable: false }); }
             } else await control(current, `click ${selector}`, context, true);
             break;
           case 'doubleTap': await control(current, `dblclick ${selector}`, context, true); break;
