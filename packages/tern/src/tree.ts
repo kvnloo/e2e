@@ -34,7 +34,7 @@ const roles: Readonly<Record<string, string>> = {
 };
 
 /** Bounds equality accommodates the native layout's single-pixel rounding. */
-export function sameBox(a: readonly number[], b: readonly number[]): boolean {
+function sameBox(a: readonly number[], b: readonly number[]): boolean {
   return a.length === 4 && b.length === 4 && a.every((value, index) => Number.isFinite(value) && Math.abs(value - b[index]!) <= 1);
 }
 
