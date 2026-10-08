@@ -20,5 +20,12 @@ test('offscreen scroll resolves an owned address while taps and truly hidden scr
 test('a focus redirect cannot turn a targeted fill into a different secret sink',()=>{
   const root=semanticTree({id:0,children:[{id:1,role:'TextInput',bounds},{id:2,role:'PasswordInput',bounds,states:['focused']}]},[],dump,{width:200,height:100});
   expect(()=>focusedEditable(root,'ax:1')).toThrow();expect(focusedEditable(root).ref.id).toBe('ax:2');
-  const ambiguous={...root,children:root.children!.map(n=>({...n,states:{...n.states,focused:true}}))};expect(()=>focusedEditable(ambiguous)).toThrow();
+});
+test('multiple focused editors refuse a targeted typing destination',()=>{
+  const secondBounds=[0,35,100,30];
+  const root=semanticTree({id:0,children:[
+    {id:1,role:'TextInput',bounds,states:['focused']},
+    {id:2,role:'PasswordInput',bounds:secondBounds,states:['focused']},
+  ]},[],[...dump,{path:'root>password',nth:'input:nth(1)',rect:secondBounds,visible:true}],{width:200,height:100});
+  expect(()=>focusedEditable(root,'ax:1')).toThrow(expect.objectContaining({code:'NOT_ACTIONABLE',retryable:false}));
 });
