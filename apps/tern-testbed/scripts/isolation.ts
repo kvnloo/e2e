@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import { mkdtemp, mkdir, rm, writeFile, access } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, writeFile, access, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -37,8 +37,10 @@ try {
   const unblocked=once(blocker,'close');blocker.destroy();await unblocked;
   await waitField(agent,'replaced',request.signal);
   assert(JSON.stringify(await nativeControl(agent,'a11y',request.signal)).includes('Count: 0'),'cancelled queued pointer must not click');
-  const hold=join(agent.id,'cutpoint.hold'),marker=join(agent.id,'cutpoint'),waiting=join(agent.id,'cutpoint.waiting');
+  const hold=join(agent.id,'cutpoint.hold'),marker=join(agent.id,'cutpoint'),waiting=join(agent.id,'cutpoint.waiting'),receipt=join(agent.id,'effect.receipt');
+  const snap=async()=>await readFile(receipt,'utf8').catch(()=>'');
   const park=async(name:string,command:string)=>{
+    const prior=await snap();
     await writeFile(hold,'');
     await writeFile(marker,name);
     const socket=await connect();
@@ -54,6 +56,8 @@ try {
     while(Date.now()<released){
       try{await access(waiting);await delay(10,undefined,{signal:request.signal});}catch{break;}
     }
+    const delta=(await snap()).slice(prior.length).split('\n').filter(Boolean);
+    assert(!delta.includes(name),`cancelled ${name} must not append an effect receipt`);
   };
   await park('keymap-unicode','K 0 U00E9\n');
   await waitField(agent,'replaced',request.signal);
@@ -65,6 +69,8 @@ try {
   await agent.input!.type('replaced',request.signal);
   await waitField(agent,'replaced',request.signal);
   await park('modifier-press','K 1 U0078\n');
+  await waitField(agent,'replaced',request.signal);
+  await park('modifier-press-1','K 3 U0078\n');
   await waitField(agent,'replaced',request.signal);
   await park('modifier-state','K 0 U0078\n');
   await waitField(agent,'replaced',request.signal);
