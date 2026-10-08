@@ -25,7 +25,7 @@ export async function childPids(pid: number): Promise<number[]> {
 
 /** Guest-authored launch receipts are not authority: prove the current kernel ancestry. */
 export async function ownedDescendant(identity:ProcessIdentity,root:ProcessIdentity):Promise<boolean>{
-  if(!Number.isSafeInteger(identity.pid)||identity.pid<=0||!Number.isSafeInteger(root.pid)||root.pid<=0||!await stillOwned(identity)||!await stillOwned(root))return false;
+  if(identity.pid===root.pid||!Number.isSafeInteger(identity.pid)||identity.pid<=0||!Number.isSafeInteger(root.pid)||root.pid<=0||!await stillOwned(identity)||!await stillOwned(root))return false;
   const chain:Array<{identity:ProcessIdentity;parent:number}>=[];
   let pid=identity.pid;
   try{

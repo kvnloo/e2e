@@ -2,7 +2,8 @@ import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { setTimeout as delay } from 'node:timers/promises';
-import type { TernLease } from '@e2e-dev/tern';
+import { requireNativeGate,type TernLease } from '@e2e-dev/tern';
+import { EngineError } from 'e2e/engine';
 const exec=promisify(execFile);
 interface Ax { role?:string; name?:string; placeholder?:string; value?:string|number; bounds?:number[]; states?:string[]; children?:Ax[] }
 interface Dom { rect?:number[]; input?:{value?:string;focused?:boolean}; children?:Dom[] }
@@ -12,7 +13,8 @@ const box=(a:readonly number[]|undefined,b:readonly number[]|undefined)=>Boolean
 /** Testbed-only native probe. Every value comes from current AX plus current rendered DOM, never TSP/ACK records. */
 export async function nativeControl(lease:TernLease,scenario:string,signal:AbortSignal):Promise<Record<string,unknown>> {
   const after=await lease.guard?.(signal);
-  try { const {stdout}=await exec(lease.binary,['ctl','--control',lease.control!,scenario],{env:lease.env,signal,timeout:30000,maxBuffer:8*1024*1024});const value=JSON.parse(stdout) as Record<string,unknown>;assert.equal(value.ok,true);return value; }
+  const inspect=async(command:string)=>{const {stdout}=await exec(lease.binary,['ctl','--control',lease.control!,command],{env:lease.env,signal,timeout:30000,maxBuffer:8*1024*1024});const value=JSON.parse(stdout) as Record<string,unknown>;assert.equal(value.ok,true);return value;};
+  try{if(scenario!=='state')requireNativeGate(await inspect('state'));const value=await inspect(scenario);requireNativeGate(scenario==='state'?value:await inspect('state'));return value;}
   finally {await after?.();}
 }
 export async function nativeField(lease:TernLease,signal:AbortSignal):Promise<{value:string;focused:boolean;selector:string}> {
@@ -26,6 +28,6 @@ export async function nativeField(lease:TernLease,signal:AbortSignal):Promise<{v
 }
 export async function waitField(lease:TernLease,expected:string,signal:AbortSignal):Promise<void> {
   const deadline=Date.now()+30000;
-  for(;;){try{if((await nativeField(lease,signal)).value===expected)return;}catch(error){if(signal.aborted)throw error;} if(Date.now()>=deadline)throw new Error('Actual native value did not settle');await delay(25,undefined,{signal});}
+  for(;;){try{if((await nativeField(lease,signal)).value===expected)return;}catch(error){if(signal.aborted||error instanceof EngineError&&error.code==='NOT_ACTIONABLE')throw error;}if(Date.now()>=deadline)throw new Error('Actual native value did not settle');await delay(25,undefined,{signal});}
 }
 export async function focusField(lease:TernLease,signal:AbortSignal):Promise<void>{const field=await nativeField(lease,signal);await nativeControl(lease,`a11y focus ${JSON.stringify(field.selector)}`,signal);assert.equal((await nativeField(lease,signal)).focused,true);}
