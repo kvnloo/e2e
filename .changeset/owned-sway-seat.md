@@ -11,7 +11,7 @@ Required native fixtures also cover deliberately failed/retried bodies, an actua
 
 Keep cleanup journals host-private across sandbox boundaries, serialize supervisor publication/fork against durable closing, recover interrupted pre-journal allocation, and revalidate descendant PID/start/parent after pidfd acquisition. Cancel buffered injection when its client disconnects and reject post-guard cancellation before dispatch. Require structured intended failure/deadline outcomes and decode nested/styled recorded tool heads.
 
-Guard direct native provider input and output capture against active or unknown Tern vendor gates before/after operations. Require a licensed/preprovisioned isolated test profile independently of native executable delivery; no live host authentication is imported. Strict kernel descendants exclude the pinned parent itself.
+Guard native input/capture with strict phase-off and null-error gate readback before/after operations; accept either nonapplicable gates or applicable signed-in beta gates, matching native 0.6.1. Active/unknown gates refuse without host-auth imports or account automation. Strict kernel descendants exclude the pinned parent itself.
 
 Authenticate pending parent launches before erasing receipts, reject disconnected queued key/pointer requests, and keep the retained injector alive after empty aborted connections. For disposable guests, pin namespace/root descriptors and route Tern server/apps/control, capture and IPC into the owned guest. Stage profiles privately and publish without replacement; keep generated configuration read-only and supervisor authority outside guest binds.
 
