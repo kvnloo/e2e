@@ -21,7 +21,7 @@ jobs:
       - name: Require permitted pinned native runtime delivery
         run: |
           test -n "$TERN_RUNTIME_URL" && test -n "$TERN_RUNTIME_SHA256" || {
-            echo '::error::Native Tern remains closed beta. Supply maintainer-approved public Linux archive and SHA256 plus a vendor-supported licensed isolated test profile; no host authentication import, gate bypass or simulated native smoke fallback.'
+            echo '::error::Supply maintainer-approved public pinned native Tern archive and SHA256. Native gate readiness is checked separately; no host authentication import, gate bypass or simulated native smoke fallback.'
             exit 1
           }
           mkdir -p "$RUNNER_TEMP/tern-runtime"
