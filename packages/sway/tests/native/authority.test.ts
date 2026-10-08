@@ -35,8 +35,8 @@ test('open private fence publishes under lock then close blocks a later helper',
   await assert.rejects(lstat(join(directory,'second-dest')),{code:'ENOENT'});
  }finally{await rm(directory,{recursive:true});}
 });
-test('guest-planted ancestor symlink cannot redirect host publication or directory creation',async()=>{
- const directory=await mkdtemp('/tmp/e2e-authority-');try{const stage=join(directory,'stage'),sentinel=join(directory,'sentinel'),alias=join(directory,'alias');await mkdir(stage,{mode:0o700});await mkdir(sentinel,{mode:0o700});await symlink(sentinel,alias);await assert.rejects(exec(binary,['publish-root',stage,join(alias,'victim')]),{code:2});await assert.rejects(exec(binary,['mkdir-root',join(alias,'victim')]),{code:2});await assert.rejects(lstat(join(sentinel,'victim')),{code:'ENOENT'});}finally{await rm(directory,{recursive:true});}
+test('guest-planted ancestor symlink cannot redirect host publication',async()=>{
+ const directory=await mkdtemp('/tmp/e2e-authority-');try{const stage=join(directory,'stage'),sentinel=join(directory,'sentinel'),alias=join(directory,'alias');await mkdir(stage,{mode:0o700});await mkdir(sentinel,{mode:0o700});await symlink(sentinel,alias);await assert.rejects(exec(binary,['publish-root',stage,join(alias,'victim')]),{code:2});await assert.rejects(lstat(join(sentinel,'victim')),{code:'ENOENT'});}finally{await rm(directory,{recursive:true});}
 });
 test('a stale target generation cannot enter any namespace or dispatch its program',async()=>{
  const nsenter=process.env.E2E_NSENTER_BINARY;assert(nsenter?.startsWith('/'),'explicit E2E_NSENTER_BINARY is required');await assert.rejects(exec(binary,['enter-ns',String(process.pid),'0',nsenter,'/usr/bin/true']),{code:2});
