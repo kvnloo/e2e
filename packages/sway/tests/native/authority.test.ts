@@ -62,3 +62,19 @@ test('claim-root moves a pinned inode and refuses symlink source ancestors or fo
   await assert.rejects(lstat(join(directory,'mismatch')),{code:'ENOENT'});
  }finally{await rm(directory,{recursive:true});}
 });
+test('claim-root refuses a source swapped after the caller recorded ownership',async()=>{
+ const directory=await mkdtemp('/tmp/e2e-authority-');try{
+  const stage=join(directory,'stage'),dest=join(directory,'dest');
+  await mkdir(stage,{mode:0o700});await writeFile(join(stage,'owned-marker'),'owned');
+  const owned=await lstat(stage);
+  await rm(stage,{recursive:true});await mkdir(stage,{mode:0o700});await writeFile(join(stage,'foreign-sentinel'),'foreign-payload');
+  const foreign=await lstat(stage);assert.notEqual(foreign.ino,owned.ino);
+  await assert.rejects(exec(binary,['claim-root',stage,dest,String(owned.dev),String(owned.ino)]),{code:2});
+  const remaining=await lstat(stage);assert.equal(remaining.dev,foreign.dev);assert.equal(remaining.ino,foreign.ino);
+  assert.equal(await readFile(join(stage,'foreign-sentinel'),'utf8'),'foreign-payload');
+  await assert.rejects(lstat(join(stage,'owned-marker')),{code:'ENOENT'});
+  await assert.rejects(lstat(dest),{code:'ENOENT'});
+  await assert.rejects(exec(binary,['claim-root',join(directory,'gone'),join(directory,'missing-dest'),String(owned.dev),String(owned.ino)]),{code:2});
+  await assert.rejects(lstat(join(directory,'missing-dest')),{code:'ENOENT'});
+ }finally{await rm(directory,{recursive:true});}
+});
