@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import { mkdtemp, mkdir, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, writeFile, access } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { createConnection } from 'node:net';
 import { once } from 'node:events';
+import { setTimeout as delay } from 'node:timers/promises';
 import { sway } from '@e2e-dev/sway';
 import type { TernRequest,TernLease } from '@e2e-dev/tern';
 import { nativeOptions } from '../native-options.ts';
@@ -28,14 +29,54 @@ try {
   const blocker=await connect();await new Promise<void>((accept,reject)=>blocker.write('T 1024\n',error=>error?reject(error):accept()));
   const dump=await nativeControl(agent,'dump button',request.signal) as unknown as {elements:Array<{visible:boolean;rect:number[]}>};
   const button=dump.elements.filter(element=>element.visible);assert.equal(button.length,1);const rect=button[0]!.rect;
-  for(const command of ['K 2 U0058\n',`P ${Math.floor(rect[0]!+rect[2]!/2)} ${Math.floor(rect[1]!+rect[3]!/2)} 1280 900 1\n`]){
+  const click=`P ${Math.floor(rect[0]!+rect[2]!/2)} ${Math.floor(rect[1]!+rect[3]!/2)} 1280 900 1\n`;
+  for(const command of ['K 0 U0078\n',click]){
     const queued=await connect();await new Promise<void>((accept,reject)=>queued.write(command,error=>error?reject(error):accept()));const closed=once(queued,'close');queued.destroy();await closed;
   }
   const empty=await connect(),emptyClosed=once(empty,'close');empty.destroy();await emptyClosed;
   const unblocked=once(blocker,'close');blocker.destroy();await unblocked;
-  await agent.input!.press('End',request.signal);
   await waitField(agent,'replaced',request.signal);
   assert(JSON.stringify(await nativeControl(agent,'a11y',request.signal)).includes('Count: 0'),'cancelled queued pointer must not click');
+  const hold=join(agent.id,'cutpoint.hold'),marker=join(agent.id,'cutpoint'),waiting=join(agent.id,'cutpoint.waiting');
+  const park=async(name:string,command:string)=>{
+    await writeFile(hold,'');
+    await writeFile(marker,name);
+    const socket=await connect();
+    const closed=once(socket,'close');
+    await new Promise<void>((accept,reject)=>socket.write(command,error=>error?reject(error):accept()));
+    const deadline=Date.now()+5000;
+    for(;;){
+      try{await access(waiting);break;}catch{assert(Date.now()<deadline,`native cutpoint ${name} was not reached`);await delay(10,undefined,{signal:request.signal});}
+    }
+    socket.destroy();await closed;
+    await rm(hold);
+    const released=Date.now()+5000;
+    while(Date.now()<released){
+      try{await access(waiting);await delay(10,undefined,{signal:request.signal});}catch{break;}
+    }
+  };
+  await park('keymap-unicode','K 0 U00E9\n');
+  await waitField(agent,'replaced',request.signal);
+  await agent.input!.type('é',request.signal);
+  await waitField(agent,'replacedé',request.signal);
+  await park('keymap-restore','K 0 U0078\n');
+  await waitField(agent,'replacedé',request.signal);
+  await agent.input!.press('Control+A',request.signal);
+  await agent.input!.type('replaced',request.signal);
+  await waitField(agent,'replaced',request.signal);
+  await park('modifier-press','K 1 U0078\n');
+  await waitField(agent,'replaced',request.signal);
+  await park('modifier-state','K 0 U0078\n');
+  await waitField(agent,'replaced',request.signal);
+  await park('key-press','K 0 U0078\n');
+  await waitField(agent,'replaced',request.signal);
+  await park('pointer-motion',click);
+  await waitField(agent,'replaced',request.signal);
+  assert(JSON.stringify(await nativeControl(agent,'a11y',request.signal)).includes('Count: 0'),'cancelled motion cutpoint must not click');
+  await park('pointer-button',click);
+  await waitField(agent,'replaced',request.signal);
+  assert(JSON.stringify(await nativeControl(agent,'a11y',request.signal)).includes('Count: 0'),'cancelled button cutpoint must not click');
+  await agent.input!.press('End',request.signal);
   await agent.input!.type('!',request.signal);await waitField(agent,'replaced!',request.signal);
   assert.deepEqual(await nativeField(sentinel,request.signal),before,'other native lease value/focus is untouched');
   await sentinel.input!.type('!',request.signal);await waitField(sentinel,'human-sentine!l',request.signal); // actual insertion position proves the caret, not a draft receipt.
