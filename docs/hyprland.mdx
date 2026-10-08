@@ -42,7 +42,11 @@ Stock Sway's Wayland app id is `wlroots`, not a generated class. Placement there
 
 The adapter supports the source-reviewed Hyprland 0.53.0 and 0.56.2 APIs. The real disposable boundary fixture pins 0.56.2 commit `efb50993780079460b0cbed1363e2166a2de1d9f`; compatibility source review is not runtime proof for 0.53.0. Native Tern is closed beta. The public MIT SDK does not include the native executable. Maintainer-approved permitted public runtime delivery and its SHA256 are prerequisites for required CI; no private binary, login, simulated `serve`, or skipped smoke test counts as native acceptance.
 
+Native Tern 0.6 must explicitly report `state.gate.applies === false` before and after app observation/input/capture. AX can expose the underlying app while vendor sign-in covers it. Unknown or active gates therefore stop native acceptance, including fresh empty profiles. Vendor-supported licensing/preprovisioning of an isolated test profile is a separate prerequisite; this setup never copies live host authentication or performs account actions.
+
 A nested Hyprland parent needs real linux-dmabuf and an explicit already-readable/writable render-only node. A pixman parent is not equivalent. The fixture uses a fresh GLES Sway parent and rootless bubblewrap, with only the exact private parent Wayland socket and selected `/dev/dri/renderD*` device. KMS/card devices, logind/seatd, system/auth D-Bus sockets and host profiles are absent. `/proc` and `/sys` are read-only metadata; PID coordinates remain the host coordinates for ownership checks. No sudo, permission changes, physical-output fallback or provider credentials are used.
+
+Outer Sway endpoints and supervisor journals live in a separate host-private directory that is never exposed by guest binds, writable ancestors or symlinks. Only the exact outer Wayland socket is mounted; guest runtime/profile/foreign-fixture/short-native paths are mounted individually. Nested Sway journals remain host-private. The fixture pins the guest compositor to the current kernel descendants of its outer launcher and rejects forged parent or child generation receipts. The shared launch/closing lock prevents late same-PID publication after cleanup begins.
 
 ## Real boundary gate
 

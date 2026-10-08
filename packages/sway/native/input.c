@@ -326,8 +326,9 @@ int main(int argc, char **argv) {
   sigaction(SIGTERM, &action, NULL); sigaction(SIGINT, &action, NULL); signal(SIGPIPE, SIG_IGN);
   if (argc > 1 && strcmp(argv[1], "supervise") == 0) return supervise(argc, argv);
   if (argc >= 4 && strcmp(argv[1], "exec-owned") == 0) {
-    if (record_identity(argv[2])) return 2;
-    if (interrupted) return 0;
+    int lock=lifecycle_lock(argv[2],false);if(lock<0)return 2;
+    if(record_identity(argv[2])){close(lock);return 2;}
+    if(interrupted){close(lock);return 0;}
     signal(SIGTERM, SIG_DFL); signal(SIGINT, SIG_DFL);
     execv(argv[3], &argv[3]); return 127;
   }

@@ -1,27 +1,27 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { mkdir, mkdtemp, readFile, writeFile, appendFile, rename, readdir, lstat, rm, rmdir } from 'node:fs/promises';
-import { join, dirname, basename, isAbsolute } from 'node:path';
+import { mkdir, mkdtemp, readFile, writeFile, appendFile, rename, readdir, lstat, realpath, rm, rmdir } from 'node:fs/promises';
+import { join, dirname, basename, isAbsolute, sep } from 'node:path';
 import { tmpdir } from 'node:os';
 import { setTimeout as delay } from 'node:timers/promises';
 import { EngineError, ConfigurationError, type EngineCleanupContext } from 'e2e/engine';
-import { sway, ownedDirectory, processIdentity, stillOwned, type SwayOptions, type OwnedWaylandParent, type ProcessIdentity } from '@e2e-dev/sway';
+import { sway, ownedDirectory, processIdentity, stillOwned, ownedDescendant, type SwayOptions, type OwnedWaylandParent, type ProcessIdentity } from '@e2e-dev/sway';
 import type { TernProvider, TernRequest, TernLease } from '@e2e-dev/tern';
 import { humanProof, unchanged, ownedClient, type Monitor, type Client, type HumanProof } from './proof.ts';
 const exec = promisify(execFile);
 export interface HyprlandOptions {
-  readonly host: { readonly instance: string; readonly runtimeDir: string; readonly waylandDisplay: string; readonly hyprctl: string };
+  readonly host: { readonly instance: string; readonly runtimeDir: string; readonly waylandDisplay: string; readonly hyprctl: string; /** Independently pinned compositor generation for sandboxed parents. */ readonly process?: ProcessIdentity };
   readonly protectedWorkspaces: readonly (number | string)[];
   readonly protectedOutputs: readonly string[];
   /** Named workspace only. Omit for a generated per-attempt name. It must not exist, even empty. */
   readonly workspace?: string;
-  readonly sway: Omit<SwayOptions, 'parent' | 'root'>;
+  readonly sway: Omit<SwayOptions, 'parent' | 'root' | 'journalRoot'>;
   readonly root?: string;
   /** Short private directory shared with an explicitly sandboxed parent, if used. */
   readonly nativeRoot?: string;
 }
-interface Record { version: 1; runId: string; targetName: string; directory: string; output: string; tag: string; workspace: string; childRoot: string; host: ProcessIdentity; existingWorkspaces: number[]; outputRequested?: boolean; workspaceId?: number; identityFile?: string; child?: ProcessIdentity; outputId?: number; artifactsDir: string }
+interface Record { version: 1; runId: string; targetName: string; directory: string; output: string; tag: string; workspace: string; childRoot: string; host: ProcessIdentity; existingWorkspaces: number[]; outputRequested?: boolean; workspaceId?: number; workspaceOriginalName?: string; workspaceRenamed?: boolean; identityFile?: string; child?: ProcessIdentity; outputId?: number; outputGeometry?: {x:number;y:number;width:number;height:number;scale:number}; artifactsDir: string; artifactsReady?: boolean }
 interface Workspace { id: number; name: string; monitorID: number | string; windows: number; ispersistent: boolean }
 const fail = (message: string) => new EngineError('INVALID_STATE', message, { retryable: false });
 const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
@@ -52,9 +52,16 @@ async function hostIdentity(options: HyprlandOptions): Promise<ProcessIdentity> 
   const pid = Number(lines[0]); if (!Number.isSafeInteger(pid) || pid <= 0 || lines[1] !== options.host.waylandDisplay) throw fail('Explicit Hyprland PID/display lock does not match');
   const wayland = await lstat(join(options.host.runtimeDir, options.host.waylandDisplay));
   if (!wayland.isSocket() || wayland.uid !== process.getuid?.()) throw fail('Explicit parent Wayland endpoint is not owned');
-  return processIdentity(pid);
+  const identity=await processIdentity(pid), pinned=options.host.process;
+  if(pinned&&(pinned.pid!==identity.pid||pinned.start!==identity.start))throw fail('Explicit parent generation does not match its independently pinned identity');
+  return identity;
 }
 async function save(record: Record): Promise<void> { await writeFile(join(record.directory, 'lease.next'), JSON.stringify(record), { mode: 0o600 }); await rename(join(record.directory, 'lease.next'), join(record.directory, 'lease.json')); }
+async function privateBoundary(hostRoot:string,guestRoots:readonly string[]):Promise<void> {
+  const host=await realpath(hostRoot);
+  for(const path of guestRoots){const guest=await realpath(path);if(host===guest||host.startsWith(guest+sep))throw fail('Host lease journal is reachable through a guest-writable root');}
+}
+async function removeChildRoot(path:string):Promise<void>{try{await ownedDirectory(path);await rmdir(path);}catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;}}
 function resource(options: HyprlandOptions, record: Record) {
   const ctl = controller(options), size = options.sway.size ?? { width: 1280, height: 900 };
   const proof = async (signal: AbortSignal) => {
@@ -62,7 +69,7 @@ function resource(options: HyprlandOptions, record: Record) {
     if(options.protectedOutputs.some(name=>monitors.filter(m=>m.name===name&&!m.disabled).length!==1)) throw fail('A declared protected output is missing or ambiguous');
     return humanProof(monitors.filter(m=>options.protectedOutputs.includes(m.name)),await ctl.query<{address?:string}>('activewindow',signal),await ctl.query<{x:number;y:number}>('cursorpos',signal),record.output);
   };
-  const log = async (phase: string, before: HumanProof, after: HumanProof) => { await appendFile(join(record.artifactsDir,'hyprland-proof.jsonl'), JSON.stringify({ phase, before, after, output: record.output, workspace: record.workspace, tag: record.tag })+'\n',{mode:0o600}); unchanged(before,after); };
+  const log=async(phase:string,before:HumanProof,after:HumanProof)=>{const line=JSON.stringify({phase,before,after,output:record.output,workspace:record.workspace,tag:record.tag})+'\n';await appendFile(join(record.directory,'hyprland-proof.jsonl'),line,{mode:0o600});if(record.artifactsReady)await appendFile(join(record.artifactsDir,'hyprland-proof.jsonl'),line,{mode:0o600});unchanged(before,after);};
   const verify = async (signal: AbortSignal, requireChild: boolean) => {
     const currentHost=await hostIdentity(options);
     if (!await stillOwned(record.host) || currentHost.pid !== record.host.pid || currentHost.start !== record.host.start) throw fail('Hyprland host generation changed');
@@ -72,14 +79,15 @@ function resource(options: HyprlandOptions, record: Record) {
     if (matching.length !== 1 || matching[0]!.id !== record.outputId || matching[0]!.disabled) throw fail('Owned output identity changed');
     const output = matching[0]!;
     if (options.protectedWorkspaces.some(w=>w===output.activeWorkspace.id || w===output.activeWorkspace.name)) throw fail('Owned output activated a protected workspace');
-    if(requireChild&&(output.activeWorkspace.id!==record.workspaceId||output.activeWorkspace.name!==record.workspace)) throw fail('Owned workspace is not the visible workspace of the owned output');
-    if (!record.child && record.identityFile) { try { record.child=JSON.parse(await readFile(record.identityFile,'utf8')) as ProcessIdentity; await save(record); } catch(error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; } }
+    if(record.outputGeometry&&JSON.stringify({x:output.x,y:output.y,width:output.width,height:output.height,scale:output.scale})!==JSON.stringify(record.outputGeometry))throw fail('Owned output logical geometry changed');
+    if(record.workspaceId!==undefined&&(output.activeWorkspace.id!==record.workspaceId||(record.workspaceRenamed?output.activeWorkspace.name!==record.workspace:output.activeWorkspace.name!==record.workspaceOriginalName&&output.activeWorkspace.name!==record.workspace)))throw fail('Owned workspace identity or rename phase changed');
+    if(!record.child&&record.identityFile){try{const candidate=JSON.parse(await readFile(record.identityFile,'utf8')) as ProcessIdentity;if(await stillOwned(candidate)){if(!await ownedDescendant(candidate,record.host))throw fail('Guest launch receipt is not an independently verified descendant of the pinned compositor');const scoped=clients.filter(c=>c.pid===candidate.pid&&c.monitor===output.id&&c.tags.some(t=>t===record.tag||t===`${record.tag}*`));if(scoped.length===1){ownedClient(scoped[0]!,candidate.pid,record.tag,output,record.workspace,size);record.child=candidate;await save(record);}}}catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;}}
     const tagged = clients.filter(c=>c.tags.some(t=>t===record.tag||t===`${record.tag}*`));
     const onOutput = clients.filter(c=>c.monitor===output.id);
     const childAlive=record.child!==undefined&&await stillOwned(record.child);
     if (tagged.length > 1 || onOutput.some(c=>!(childAlive&&c.pid===record.child!.pid))) throw fail('Refusing output with a foreign client');
     if (tagged.length) {
-      if (!record.child || !await stillOwned(record.child)) throw fail('Tagged client does not belong to the recorded process generation');
+      if (!record.child || !await ownedDescendant(record.child,record.host)) throw fail('Tagged client does not belong to the independently verified parent process generation');
       if(requireChild) ownedClient(tagged[0]!, record.child.pid, record.tag, output, record.workspace, size);
     } else if (requireChild) throw fail('Owned nested client is absent');
     return output;
@@ -94,28 +102,32 @@ function resource(options: HyprlandOptions, record: Record) {
       const rules=`monitor ${record.output}; workspace name:${record.workspace} silent; tag +${record.tag}; float on; size ${size.width} ${size.height}; border_size 0; no_shadow on; no_initial_focus on; no_focus on`;
       await ctl.command(['dispatch','exec',`[${rules}] exec /usr/bin/env -i ${[...environment,binary,'exec-owned',identityFile,...args.slice(2)].map(quote).join(' ')}`],signal);
       const deadline=Date.now()+15000;
+      let candidate:ProcessIdentity|undefined;
       for (;;) {
         signal.throwIfAborted();
-        try { record.child=JSON.parse(await readFile(identityFile,'utf8')) as ProcessIdentity; await save(record); break; }
+        try{candidate=JSON.parse(await readFile(identityFile,'utf8')) as ProcessIdentity;if(!await ownedDescendant(candidate,record.host))throw fail('Guest launch receipt is not an independently verified descendant of the pinned compositor');break;}
         catch(error) { if ((error as NodeJS.ErrnoException).code!=='ENOENT') throw error; }
         if(Date.now()>=deadline) throw fail('Owned same-PID compositor launch did not record identity'); await delay(25,undefined,{signal});
       }
       for (;;) {
         const clients=await ctl.query<Client[]>('clients',signal);
-        const matching=clients.filter(c=>c.pid===record.child!.pid);
-        if(matching.length===1&&matching[0]!.mapped&&!matching[0]!.hidden&&matching[0]!.size[0]===size.width&&matching[0]!.size[1]===size.height) break;
-        if(!await stillOwned(record.child!) || Date.now()>=deadline) throw fail('Owned nested compositor never mapped'); await delay(25,undefined,{signal});
+        const matching=clients.filter(c=>c.pid===candidate!.pid);
+        if(matching.length===1&&matching[0]!.mapped&&!matching[0]!.hidden&&matching[0]!.size[0]===size.width&&matching[0]!.size[1]===size.height)break;
+        if(!await stillOwned(candidate!)||Date.now()>=deadline)throw fail('Owned nested compositor never mapped');await delay(25,undefined,{signal});
       }
       await verify(signal,true); await log('launch',before,await proof(signal)); return record.child!;
     }
   };
-  const provider=sway({...options.sway,root:record.childRoot,parent});
+  const provider=sway({...options.sway,root:record.childRoot,journalRoot:join(record.directory,'sway-journals'),parent});
   const close = async(context: EngineCleanupContext, lease?: TernLease) => {
     const signal=context.signal, before=await proof(signal);
+    if(record.identityFile){try{await ownedDirectory(dirname(record.identityFile));await exec(options.sway.binaries.input,['close',record.identityFile],{env:{PATH:'/usr/bin:/bin'},signal,timeout:context.timeoutMs});}catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;}}
     const monitors=await ctl.query<Monitor[]>('monitors',signal);
     if(monitors.some(m=>m.name===record.output)) await verify(signal,false);
+    if(!record.child&&record.identityFile){const deadline=Date.now()+context.timeoutMs;for(;;){await verify(signal,false);if(record.child)break;let candidate:ProcessIdentity;try{candidate=JSON.parse(await readFile(record.identityFile,'utf8')) as ProcessIdentity;}catch(error){if((error as NodeJS.ErrnoException).code==='ENOENT')break;throw error;}if(!await stillOwned(candidate))break;if(!await ownedDescendant(candidate,record.host))throw fail('Refusing an unverified guest cleanup receipt');if(Date.now()>=deadline)throw fail('Published nested process never established independently verified tagged containment');await delay(25,undefined,{signal});}}
     if(lease) await provider.release(lease,context);
     await provider.sweep!({runId:record.runId,targetName:record.targetName,env:{}},context);
+    if(record.child&&await stillOwned(record.child)){await verify(signal,false);if(!await ownedDescendant(record.child,record.host))throw fail('Refusing changed nested process ancestry');await exec(options.sway.binaries.input,['stop',String(record.child.pid),record.child.start],{env:{PATH:'/usr/bin:/bin'},signal,timeout:context.timeoutMs});const deadline=Date.now()+context.timeoutMs;while(await stillOwned(record.child)){if(Date.now()>=deadline)throw fail('Exact nested generation survived cleanup');await delay(25,undefined,{signal});}}
     if(monitors.some(m=>m.name===record.output)) {
       await verify(signal,false);
       if((await ctl.query<Client[]>('clients',signal)).some(c=>c.monitor===record.outputId)) throw fail('Owned output still contains a client; refusing removal');
@@ -128,7 +140,7 @@ function resource(options: HyprlandOptions, record: Record) {
       if(Date.now()>=deadline) throw fail('Owned nonpersistent workspace survived cleanup');
       await delay(25,undefined,{signal});
     }
-    await ownedDirectory(record.childRoot); await rmdir(record.childRoot);
+    await removeChildRoot(record.childRoot);
     await rm(record.directory,{recursive:true});
   };
   return {provider,close,verify,proof,log,ctl};
@@ -151,11 +163,15 @@ export function hyprland(options: HyprlandOptions): TernProvider {
       // The child suffix adds 9 bytes; Sway's run/target hash adds another 25 to its 48-byte root budget.
       if(!isAbsolute(nativeRoot)||Buffer.byteLength(nativeRoot)>14) throw new ConfigurationError('INVALID_CONFIG','Native compositor root must be an explicit absolute directory of at most 14 bytes');
       await mkdir(nativeRoot,{recursive:true,mode:0o700}); await ownedDirectory(nativeRoot);
-      const directory=await mkdtemp(join(root,'attempt-')), childRoot=await mkdtemp(join(nativeRoot,'s-'));
-      await mkdir(request.artifactsDir,{recursive:true,mode:0o700});
-      const record: Record={version:1,runId:request.runId,targetName:request.targetName,directory,childRoot,host,existingWorkspaces:workspaces.map(w=>w.id),output:`e2e-${token}`,tag:`e2e-${token}`,workspace,artifactsDir:request.artifactsDir}; await save(record);
+      await privateBoundary(dirname(root),[nativeRoot,options.host.runtimeDir]);
+      const directory=await mkdtemp(join(root,'attempt-')), childRoot=join(nativeRoot,`s-${token.slice(0,6)}`);
+      const record: Record={version:1,runId:request.runId,targetName:request.targetName,directory,childRoot,host,existingWorkspaces:workspaces.map(w=>w.id),output:`e2e-${token}`,tag:`e2e-${token}`,workspace,artifactsDir:request.artifactsDir};
+      try{await save(record);}catch(error){await rm(directory,{recursive:true});throw error;}
       const owned=resource(options,record);
       try {
+        await mkdir(childRoot,{mode:0o700});await ownedDirectory(childRoot);
+        await mkdir(request.artifactsDir,{recursive:true,mode:0o700});
+        record.artifactsReady=true;await save(record);
         const before=await owned.proof(request.signal);
         if((await ctl.query<Monitor[]>('monitors',request.signal)).some(m=>m.name===record.output)||(await ctl.query<Client[]>('clients',request.signal)).some(c=>c.tags.includes(record.tag))) throw fail('Generated output/tag collision');
         record.outputRequested=true; await save(record);
@@ -166,15 +182,16 @@ export function hyprland(options: HyprlandOptions): TernProvider {
           output=(await ctl.query<Monitor[]>('monitors',request.signal)).find(m=>m.name===record.output);
           if(!output) { if(Date.now()>=deadline) throw fail('Named headless output was not created'); await delay(25,undefined,{signal:request.signal}); }
         }
-        record.outputId=output.id; await save(record);
+        record.outputId=output.id;record.outputGeometry={x:output.x,y:output.y,width:output.width,height:output.height,scale:output.scale};await save(record);
         const size=options.sway.size??{width:1280,height:900};
         if(output.scale!==1||output.width<size.width||output.height<size.height) throw fail('Measured owned-output default geometry cannot contain the requested child; no persistent monitor-size rule');
         const candidate=(await ctl.query<Workspace[]>('workspaces',request.signal)).find(w=>w.id===output.activeWorkspace.id);
         if(!candidate||record.existingWorkspaces.includes(candidate.id)||Number(candidate.monitorID)!==output.id||candidate.windows!==0||candidate.ispersistent||options.protectedWorkspaces.some(w=>w===candidate.id||w===candidate.name)||(await ctl.query<Client[]>('clients',request.signal)).some(c=>c.workspace.id===candidate.id||c.monitor===output.id)) throw fail('Refusing rename of a pre-existing, persistent, protected or nonempty workspace');
-        record.workspaceId=candidate.id; await save(record);
+        record.workspaceId=candidate.id;record.workspaceOriginalName=candidate.name;await save(record);
         await ctl.command(['dispatch','renameworkspace',`${candidate.id} ${record.workspace}`],request.signal);
         const renamed=(await ctl.query<Workspace[]>('workspaces',request.signal)).find(w=>w.id===candidate.id);
         if(!renamed||renamed.name!==record.workspace||Number(renamed.monitorID)!==output.id||renamed.windows!==0||renamed.ispersistent) throw fail('Exact owned workspace rename did not read back');
+        record.workspaceRenamed=true;await save(record);
         await owned.verify(request.signal,false); await owned.log('output-create',before,await owned.proof(request.signal));
         const lease=await owned.provider.acquire(request); leases.set(lease.id,owned); return lease;
       } catch(error) { await owned.close({signal:AbortSignal.timeout(30000),timeoutMs:30000} as EngineCleanupContext); throw error; }
@@ -183,7 +200,9 @@ export function hyprland(options: HyprlandOptions): TernProvider {
     async sweep(request,context) {
       const root=runRoot(options,request.runId,request.targetName); let entries:string[];
       try { await ownedDirectory(root); entries=await readdir(root); } catch(error) { if((error as NodeJS.ErrnoException).code==='ENOENT') return; throw error; }
-      for(const name of entries) { if(!name.startsWith('attempt-')) continue; const directory=join(root,name); await ownedDirectory(directory); const record=JSON.parse(await readFile(join(directory,'lease.json'),'utf8')) as Record;
+      await privateBoundary(dirname(root),[options.nativeRoot??join(tmpdir(),`hp-${process.getuid?.()}`),options.host.runtimeDir]);
+      for(const name of entries) { if(!name.startsWith('attempt-')) continue; const directory=join(root,name);await ownedDirectory(directory);let record:Record;
+        try{record=JSON.parse(await readFile(join(directory,'lease.json'),'utf8')) as Record;}catch(error){if((error as NodeJS.ErrnoException).code==='ENOENT'){await rm(directory,{recursive:true});continue;}throw error;}
         const nativeRoot=options.nativeRoot??join(tmpdir(),`hp-${process.getuid?.()}`);
         if(record.version!==1||record.runId!==request.runId||record.targetName!==request.targetName||record.directory!==directory||!/^e2e-[a-f0-9]{32}$/.test(record.output)||record.tag!==record.output||dirname(record.childRoot)!==nativeRoot||!/^s-[A-Za-z0-9]{6}$/.test(basename(record.childRoot))) throw fail('Refusing foreign containment cleanup record');
         await resource(options,record).close(context);
