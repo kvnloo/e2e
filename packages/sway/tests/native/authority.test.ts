@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
 import {test} from 'node:test';
-import {mkdtemp,mkdir,lstat,symlink,rm} from 'node:fs/promises';
+import {mkdtemp,mkdir,lstat,symlink,rm,writeFile,readFile,chmod} from 'node:fs/promises';
 import {join} from 'node:path';
 const exec=promisify(execFile),binary=process.env.E2E_INPUT_BINARY;
 assert(binary?.startsWith('/'),'explicit compiled E2E_INPUT_BINARY is required; this tests the real C helper');
@@ -14,4 +14,51 @@ test('guest-planted ancestor symlink cannot redirect host publication or directo
 });
 test('a stale target generation cannot enter any namespace or dispatch its program',async()=>{
  const nsenter=process.env.E2E_NSENTER_BINARY;assert(nsenter?.startsWith('/'),'explicit E2E_NSENTER_BINARY is required');await assert.rejects(exec(binary,['enter-ns',String(process.pid),'0',nsenter,'/usr/bin/true']),{code:2});
+});
+test('closed private dispatch fence rejects a real Node child with no receipt or effect',async()=>{
+ const directory=await mkdtemp('/tmp/e2e-authority-');try{
+  const receipt=join(directory,'dispatch.json'),effect=join(directory,'effect'),writer=join(directory,'writer.mjs');
+  await writeFile(writer,`import {writeFileSync} from 'node:fs'; writeFileSync(process.argv[1],'launched'); console.log('ok');\n`,{mode:0o700});
+  await exec(binary,['close',receipt]);
+  await assert.rejects(exec(binary,['dispatch-owned',receipt,process.execPath,writer,effect]),{code:2});
+  await assert.rejects(lstat(receipt),{code:'ENOENT'});
+  await assert.rejects(lstat(effect),{code:'ENOENT'});
+ }finally{await rm(directory,{recursive:true});}
+});
+test('open dispatch-owned publishes a private receipt and preserves actual child stdout and exit',async()=>{
+ const directory=await mkdtemp('/tmp/e2e-authority-');try{
+  const receipt=join(directory,'dispatch.json'),writer=join(directory,'writer.mjs');
+  await writeFile(writer,`console.log('ok'); process.exit(17);\n`,{mode:0o700});
+  const failure=await exec(binary,['dispatch-owned',receipt,process.execPath,writer]).then(()=>undefined,error=>error as NodeJS.ErrnoException&{stdout?:string});
+  assert.equal(failure?.code,17);
+  assert.equal(String(failure?.stdout??'').trim(),'ok');
+  const published=JSON.parse(await readFile(receipt,'utf8')) as {pid:number;start:string};
+  assert(Number.isSafeInteger(published.pid)&&published.pid>0);
+  assert(/^\d+$/.test(published.start));
+  await assert.rejects(exec(binary,['dispatch-owned',receipt,'node','-e','']),{code:2});
+  await chmod(directory,0o770);
+  await assert.rejects(exec(binary,['dispatch-owned',join(directory,'other.json'),process.execPath,'-e','']),{code:2});
+ }finally{await rm(directory,{recursive:true});}
+});
+test('claim-root moves a pinned inode and refuses symlink source ancestors or foreign destinations',async()=>{
+ const directory=await mkdtemp('/tmp/e2e-authority-');try{
+  const stage=join(directory,'stage'),dest=join(directory,'dest'),real=join(directory,'real'),alias=join(directory,'alias');
+  await mkdir(stage,{mode:0o700});const before=await lstat(stage);
+  await exec(binary,['claim-root',stage,dest,String(before.dev),String(before.ino)]);
+  const claimed=await lstat(dest);assert.equal(claimed.dev,before.dev);assert.equal(claimed.ino,before.ino);
+  await assert.rejects(lstat(stage),{code:'ENOENT'});
+  await mkdir(real,{mode:0o700});await mkdir(join(real,'nested'),{mode:0o700});await symlink(real,alias);
+  const nested=await lstat(join(real,'nested'));
+  await assert.rejects(exec(binary,['claim-root',join(alias,'nested'),join(directory,'via-alias'),String(nested.dev),String(nested.ino)]),{code:2});
+  assert.equal((await lstat(join(real,'nested'))).ino,nested.ino);
+  await assert.rejects(lstat(join(directory,'via-alias')),{code:'ENOENT'});
+  const occupied=join(directory,'occupied'),foreignStage=join(directory,'foreign-stage');
+  await mkdir(occupied,{mode:0o700});await mkdir(foreignStage,{mode:0o700});
+  const foreign=await lstat(occupied),source=await lstat(foreignStage);
+  await assert.rejects(exec(binary,['claim-root',foreignStage,occupied,String(source.dev),String(source.ino)]),{code:2});
+  assert.equal((await lstat(occupied)).ino,foreign.ino);assert.equal((await lstat(foreignStage)).ino,source.ino);
+  await assert.rejects(exec(binary,['claim-root',foreignStage,join(directory,'mismatch'),String(source.dev),'1']),{code:2});
+  assert.equal((await lstat(foreignStage)).ino,source.ino);
+  await assert.rejects(lstat(join(directory,'mismatch')),{code:'ENOENT'});
+ }finally{await rm(directory,{recursive:true});}
 });

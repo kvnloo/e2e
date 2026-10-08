@@ -47,6 +47,7 @@ static int base_fd = -1, unicode_fd = -1;
 static uint32_t base_size, base_modifiers[4], active_modifiers[4];
 static bool unicode_active;
 static uint32_t unicode_scalar;
+static char socket_directory[4096];
 struct key_entry { uint32_t code; uint32_t modifiers; };
 static struct key_entry ascii_keys[128];
 static void seat_capabilities(void *data, struct wl_seat *value, uint32_t capabilities) {
@@ -157,9 +158,7 @@ static int mkdir_root(const char *destination) {
   int child=openat(dir,name,O_RDONLY|O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC);close(dir);if(child<0)return 2;
   struct stat info;result=fstat(child,&info);close(child);return result<0||info.st_uid!=getuid()||(info.st_mode&077)?2:0;
 }
-static int supervise(int argc, char **argv) {
-  if (argc < 4 || prctl(PR_SET_CHILD_SUBREAPER, 1) < 0) return 2;
-  int lock=lifecycle_lock(argv[2],false);if(lock<0)return 2;
+static int record_identity(const char *path) {
   char stat_path[64], stat_text[4096]; snprintf(stat_path, sizeof stat_path, "/proc/%ld/stat", (long)getpid());
   FILE *stat_file = fopen(stat_path, "r"); if (!stat_file || !fgets(stat_text, sizeof stat_text, stat_file)) return 2; fclose(stat_file);
   char *fields = strrchr(stat_text, ')'); if (!fields) return 2; fields += 2;
@@ -167,11 +166,99 @@ static int supervise(int argc, char **argv) {
   while (field && index < 19) { field = strtok_r(NULL, " ", &save); index++; }
   if (!field) return 2;
   char temporary[4096];
-  int size = snprintf(temporary, sizeof temporary, "%s.next", argv[2]);
+  int size = snprintf(temporary, sizeof temporary, "%s.next", path);
   if (size < 0 || (size_t)size >= sizeof temporary) return 2;
   int fd = open(temporary, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0600); if (fd < 0) return 2;
   if (dprintf(fd, "{\"pid\":%ld,\"start\":\"%s\"}", (long)getpid(), field) < 0 || fsync(fd) < 0) { close(fd); return 2; } close(fd);
-  if (rename(temporary, argv[2]) < 0) return 2;
+  if (rename(temporary, path) < 0) return 2;
+  return 0;
+}
+static int child_status(int status) {
+  if (WIFEXITED(status)) return WEXITSTATUS(status);
+  if (WIFSIGNALED(status)) return 128 + WTERMSIG(status);
+  return 2;
+}
+static int dispatch_owned(int argc, char **argv) {
+  if (argc < 4 || argv[2][0] != '/' || argv[3][0] != '/') return 2;
+  int lock = lifecycle_lock(argv[2], false);
+  if (lock < 0) return 2;
+  if (interrupted) { close(lock); return 2; }
+  if (record_identity(argv[2])) { close(lock); return 2; }
+  if (interrupted) { close(lock); return 2; }
+  pid_t child = fork();
+  if (child < 0) { close(lock); return 2; }
+  if (child == 0) {
+    close(lock);
+    signal(SIGTERM, SIG_DFL);
+    signal(SIGINT, SIG_DFL);
+    execv(argv[3], &argv[3]);
+    _exit(127);
+  }
+  uint32_t deadline = clock_ms() + 5000;
+  for (;;) {
+    int status = 0;
+    pid_t result = waitpid(child, &status, WNOHANG);
+    if (result == child) { close(lock); return child_status(status); }
+    if (result < 0 && errno != EINTR) { close(lock); return 2; }
+    if (interrupted || (int32_t)(clock_ms() - deadline) >= 0) {
+      result = waitpid(child, &status, WNOHANG);
+      if (result == child) { close(lock); return child_status(status); }
+      close(lock);
+      return 2;
+    }
+    struct timespec pause = { 0, 10000000 };
+    nanosleep(&pause, NULL);
+  }
+}
+static int open_beneath_parent(const char *path, char *name, size_t name_size) {
+  if (!path || path[0] != '/' || strlen(path) >= 4096) return -1;
+  char parent[4096];
+  strcpy(parent, path);
+  char *slash = strrchr(parent, '/');
+  if (!slash || slash == parent || !slash[1]) return -1;
+  if (strlen(slash + 1) >= name_size) return -1;
+  strcpy(name, slash + 1);
+  *slash = 0;
+  int root = open("/", O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+  if (root < 0) return -1;
+  struct open_how how = { .flags = O_RDONLY | O_DIRECTORY | O_CLOEXEC, .resolve = RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS };
+  int dir = (int)syscall(SYS_openat2, root, parent + 1, &how, sizeof how);
+  close(root);
+  return dir;
+}
+static int claim_root(const char *source, const char *destination, const char *dev_text, const char *ino_text) {
+  char *end = NULL;
+  unsigned long long expected_dev = strtoull(dev_text, &end, 10);
+  if (!dev_text[0] || *end) return 2;
+  unsigned long long expected_ino = strtoull(ino_text, &end, 10);
+  if (!ino_text[0] || *end) return 2;
+  char src_name[256], dst_name[256];
+  int src_parent = open_beneath_parent(source, src_name, sizeof src_name);
+  if (src_parent < 0) return 2;
+  int dst_parent = open_beneath_parent(destination, dst_name, sizeof dst_name);
+  if (dst_parent < 0) { close(src_parent); return 2; }
+  int src = openat(src_parent, src_name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+  if (src < 0) { close(src_parent); close(dst_parent); return 2; }
+  struct stat info;
+  if (fstat(src, &info) < 0 || (unsigned long long)info.st_dev != expected_dev || (unsigned long long)info.st_ino != expected_ino) {
+    close(src); close(src_parent); close(dst_parent); return 2;
+  }
+  close(src);
+  if ((int)syscall(SYS_renameat2, src_parent, src_name, dst_parent, dst_name, RENAME_NOREPLACE) < 0) {
+    close(src_parent); close(dst_parent); return 2;
+  }
+  int dst = openat(dst_parent, dst_name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+  if (dst < 0 || fstat(dst, &info) < 0 || (unsigned long long)info.st_dev != expected_dev || (unsigned long long)info.st_ino != expected_ino) {
+    if (dst >= 0) close(dst);
+    (void)syscall(SYS_renameat2, dst_parent, dst_name, src_parent, src_name, RENAME_NOREPLACE);
+    close(src_parent); close(dst_parent); return 2;
+  }
+  close(dst); close(src_parent); close(dst_parent); return 0;
+}
+static int supervise(int argc, char **argv) {
+  if (argc < 4 || prctl(PR_SET_CHILD_SUBREAPER, 1) < 0) return 2;
+  int lock=lifecycle_lock(argv[2],false);if(lock<0)return 2;
+  if(record_identity(argv[2])){close(lock);return 2;}
   if (interrupted) {close(lock);return 0;}
   pid_t child = fork(); if (child < 0) {close(lock);return 2;}
   if(child==0){close(lock);signal(SIGTERM,SIG_DFL);signal(SIGINT,SIG_DFL);if(setsid()<0)_exit(126);if(!strcmp(argv[1],"supervise-ns"))_exit(enter_namespaces(argc,argv,3));execv(argv[3],&argv[3]);_exit(127);}
@@ -236,6 +323,38 @@ static bool peer_live(FILE *connection) {
   struct pollfd peer={fileno(connection),POLLRDHUP|POLLHUP|POLLERR,0};
   return !interrupted&&poll(&peer,1,0)>=0&&!(peer.revents&(POLLRDHUP|POLLHUP|POLLERR|POLLNVAL));
 }
+static int wait_cutpoint(const char *name) {
+  if (!socket_directory[0] || !name) return 0;
+  char marker[4096], hold[4096], waiting[4096];
+  int n = snprintf(marker, sizeof marker, "%s/cutpoint", socket_directory);
+  if (n < 0 || (size_t)n >= sizeof marker) return 2;
+  n = snprintf(hold, sizeof hold, "%s/cutpoint.hold", socket_directory);
+  if (n < 0 || (size_t)n >= sizeof hold) return 2;
+  n = snprintf(waiting, sizeof waiting, "%s/cutpoint.waiting", socket_directory);
+  if (n < 0 || (size_t)n >= sizeof waiting) return 2;
+  int fd = open(marker, O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
+  if (fd < 0) return 0;
+  char buf[64];
+  ssize_t got = read(fd, buf, sizeof buf - 1);
+  close(fd);
+  if (got <= 0) return 0;
+  while (got > 0 && (buf[got - 1] == '\n' || buf[got - 1] == '\r' || buf[got - 1] == ' ')) got--;
+  buf[got] = 0;
+  if (strcmp(buf, name)) return 0;
+  int mark = open(waiting, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600);
+  if (mark >= 0) close(mark);
+  while (!interrupted && faccessat(AT_FDCWD, hold, F_OK, AT_SYMLINK_NOFOLLOW) == 0) {
+    struct timespec pause = { 0, 10000000 };
+    nanosleep(&pause, NULL);
+  }
+  unlink(marker);
+  unlink(waiting);
+  return interrupted ? 2 : 0;
+}
+static int before_effect(FILE *connection, const char *name) {
+  if (wait_cutpoint(name)) return 2;
+  return peer_live(connection) ? 0 : 2;
+}
 static int send_key(FILE *connection,const char *symbol,unsigned requested_modifiers) {
   if (requested_modifiers > 15) return 2;
   xkb_keysym_t keysym = xkb_keysym_from_name(symbol, XKB_KEYSYM_NO_FLAGS);
@@ -254,10 +373,12 @@ static int send_key(FILE *connection,const char *symbol,unsigned requested_modif
   }
   if (entry.code) {
     if (unicode_active) {
+      if (before_effect(connection, "keymap-restore")) return 2;
       zwp_virtual_keyboard_v1_keymap(keyboard, WL_KEYBOARD_KEYMAP_FORMAT_XKB_V1, base_fd, base_size);
       unicode_active = false;
       memcpy(active_modifiers, base_modifiers, sizeof base_modifiers);
       if (wl_display_roundtrip(display) < 0) return 2;
+      if (!peer_live(connection)) return 2;
     }
   } else if (scalar > 127) {
     if (!unicode_active || unicode_scalar != scalar) {
@@ -272,29 +393,37 @@ static int send_key(FILE *connection,const char *symbol,unsigned requested_modif
       struct xkb_keymap *map = xkb_keymap_new_from_string(xkb_context, keymap_text, XKB_KEYMAP_FORMAT_TEXT_V1, XKB_KEYMAP_COMPILE_NO_FLAGS);
       if (!map) return 2;
       const char *names[] = { XKB_MOD_NAME_SHIFT, XKB_MOD_NAME_CTRL, XKB_MOD_NAME_ALT, XKB_MOD_NAME_LOGO };
+      uint32_t next_modifiers[4];
       for (unsigned i = 0; i < 4; i++) {
         xkb_mod_index_t index = xkb_keymap_mod_get_index(map, names[i]);
         if (index == XKB_MOD_INVALID || index >= 32) { xkb_keymap_unref(map); return 2; }
-        active_modifiers[i] = 1u << index;
+        next_modifiers[i] = 1u << index;
       }
       xkb_keymap_unref(map);
       if (unicode_fd < 0) unicode_fd = memfd_create("e2e-unicode-keymap", MFD_CLOEXEC);
       uint32_t size = (uint32_t)length + 1;
       if (unicode_fd < 0 || ftruncate(unicode_fd, size) < 0 || pwrite(unicode_fd, keymap_text, size, 0) != (ssize_t)size) return 2;
+      if (before_effect(connection, "keymap-unicode")) return 2;
       zwp_virtual_keyboard_v1_keymap(keyboard, WL_KEYBOARD_KEYMAP_FORMAT_XKB_V1, unicode_fd, size);
       unicode_active = true; unicode_scalar = scalar;
+      memcpy(active_modifiers, next_modifiers, sizeof next_modifiers);
       if (wl_display_roundtrip(display) < 0) return 2;
+      if (!peer_live(connection)) return 2;
     }
     entry.code = 30;
   } else return 2;
   requested_modifiers |= entry.modifiers;
-  if(!peer_live(connection))return 2;
   uint32_t depressed = 0;
   for (unsigned i = 0; i < 4; i++) if (requested_modifiers & (1u << i)) {
+    if (before_effect(connection, "modifier-press")) return 2;
     zwp_virtual_keyboard_v1_key(keyboard, clock_ms(), modifier_keys[i], WL_KEYBOARD_KEY_STATE_PRESSED);
     modifiers_down |= 1u << i; depressed |= active_modifiers[i];
+    if (wl_display_roundtrip(display) < 0) return 2;
   }
+  if (before_effect(connection, "modifier-state")) return 2;
   zwp_virtual_keyboard_v1_modifiers(keyboard, depressed, 0, 0, 0);
+  if (wl_display_roundtrip(display) < 0) return 2;
+  if (before_effect(connection, "key-press")) return 2;
   active_key = entry.code;
   zwp_virtual_keyboard_v1_key(keyboard, clock_ms(), active_key, WL_KEYBOARD_KEY_STATE_PRESSED); key_down = true;
   if (wl_display_roundtrip(display) < 0) return 2;
@@ -331,11 +460,13 @@ static int request(FILE *connection) {
   if(!fgets(header,sizeof header,connection)||!peer_live(connection))goto release;
   if(sscanf(header,"K %u %31s",&mask,symbol)==2)result=send_key(connection,symbol,mask);
   else if (sscanf(header, "P %u %u %u %u %u", &x, &y, &width, &height, &click) == 5 && width && height && x < width && y < height && click <= 1) {
+    if (before_effect(connection, "pointer-motion")) goto release;
     zwlr_virtual_pointer_v1_motion_absolute(pointer, clock_ms(), x, y, width, height); zwlr_virtual_pointer_v1_frame(pointer);
-    if(wl_display_roundtrip(display)<0)goto release;
-    if(click&&peer_live(connection)) {
+    if (wl_display_roundtrip(display) < 0) goto release;
+    if (click) {
+      if (before_effect(connection, "pointer-button")) goto release;
       zwlr_virtual_pointer_v1_button(pointer, clock_ms(), 0x110, WL_POINTER_BUTTON_STATE_PRESSED); pointer_down = true; zwlr_virtual_pointer_v1_frame(pointer);
-      if(wl_display_roundtrip(display)<0)goto release;
+      if (wl_display_roundtrip(display) < 0) goto release;
       zwlr_virtual_pointer_v1_button(pointer, clock_ms(), 0x110, WL_POINTER_BUTTON_STATE_RELEASED); pointer_down = false; zwlr_virtual_pointer_v1_frame(pointer);
     }
     result = wl_display_roundtrip(display) < 0 ? 2 : 0;
@@ -370,12 +501,21 @@ static int stop_owned(const char *pid_text, const char *expected_start) {
 int main(int argc, char **argv) {
   struct sigaction action = { .sa_handler = interrupt }; sigemptyset(&action.sa_mask);
   sigaction(SIGTERM, &action, NULL); sigaction(SIGINT, &action, NULL); signal(SIGPIPE, SIG_IGN);
+  if (argc >= 4 && strcmp(argv[1], "exec-owned") == 0) {
+    int lock=lifecycle_lock(argv[2],false);if(lock<0)return 2;
+    if(record_identity(argv[2])){close(lock);return 2;}
+    if(interrupted){close(lock);return 0;}
+    signal(SIGTERM, SIG_DFL); signal(SIGINT, SIG_DFL);
+    execv(argv[3], &argv[3]); return 127;
+  }
   if(argc>1&&(!strcmp(argv[1],"supervise")||!strcmp(argv[1],"supervise-ns")))return supervise(argc,argv);
   if(argc>1&&!strcmp(argv[1],"enter-ns"))return enter_namespaces(argc,argv,2);
   if(argc==4&&!strcmp(argv[1],"publish-root"))return publish_root(argv[2],argv[3]);
   if(argc==3&&!strcmp(argv[1],"mkdir-root"))return mkdir_root(argv[2]);
   if(argc==3&&strcmp(argv[1],"close")==0){int lock=lifecycle_lock(argv[2],true);if(lock<0)return 2;close(lock);return 0;}
   if (argc == 4 && strcmp(argv[1], "stop") == 0) return stop_owned(argv[2], argv[3]);
+  if (argc >= 4 && !strcmp(argv[1], "dispatch-owned")) return dispatch_owned(argc, argv);
+  if (argc == 6 && !strcmp(argv[1], "claim-root")) return claim_root(argv[2], argv[3], argv[4], argv[5]);
   if (argc != 4 || strcmp(argv[1], "serve") != 0 || !getenv("XDG_RUNTIME_DIR") || !getenv("WAYLAND_DISPLAY")) return 2;
   wanted_seat = argv[2]; display = wl_display_connect(NULL); if (!display) return 2;
   struct wl_registry *registry = wl_display_get_registry(display); wl_registry_add_listener(registry, &registry_listener, NULL);
@@ -383,10 +523,16 @@ int main(int argc, char **argv) {
   if (wl_display_roundtrip(display) < 0 || wl_display_roundtrip(display) < 0 || matches != 1 || !keyboard_manager || !pointer_manager) goto cleanup;
   keyboard = zwp_virtual_keyboard_manager_v1_create_virtual_keyboard(keyboard_manager, seat);
   pointer = zwlr_virtual_pointer_manager_v1_create_virtual_pointer(pointer_manager, seat);
+  if (!keyboard || !pointer) goto cleanup;
   if (initialize_keymap() || wl_display_roundtrip(display) < 0 || (named_capabilities & (WL_SEAT_CAPABILITY_KEYBOARD | WL_SEAT_CAPABILITY_POINTER)) != (WL_SEAT_CAPABILITY_KEYBOARD | WL_SEAT_CAPABILITY_POINTER)) goto cleanup;
   struct sockaddr_un address = { .sun_family = AF_UNIX };
   if (strlen(argv[3]) >= sizeof address.sun_path) goto cleanup;
   strcpy(address.sun_path, argv[3]);
+  if (strlen(argv[3]) >= sizeof socket_directory) goto cleanup;
+  strcpy(socket_directory, argv[3]);
+  char *dir_slash = strrchr(socket_directory, '/');
+  if (!dir_slash || dir_slash == socket_directory) goto cleanup;
+  *dir_slash = 0;
   listener = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
   if (listener < 0 || bind(listener, (struct sockaddr *)&address, sizeof address) < 0 || chmod(argv[3], 0600) < 0 || listen(listener, 4) < 0) goto cleanup;
   result = 0;
