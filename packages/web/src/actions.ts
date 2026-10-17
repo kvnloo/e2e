@@ -287,6 +287,15 @@ export function classifyActionError(rawCause: unknown, action: LocatorAction): E
     return new EngineError('NODE_STALE', text, { retryable: true, cause });
   }
   if (DETACHED_PATTERN.test(text)) {
+    // A stale retry earlier in Playwright's log does not undo input sent on
+    // a later attempt. Replaying the action could submit the same form twice.
+    if (POST_DISPATCH_PATTERN.test(text)) {
+      return new EngineError(
+        'ACTION_MAY_HAVE_COMMITTED',
+        `${action.kind} detached after its input was dispatched: ${text}`,
+        { retryable: false, cause },
+      );
+    }
     return new EngineError('NODE_STALE', text, { retryable: true, cause });
   }
   if (/Timeout .*exceeded/i.test(text) || isPwTimeout(rawCause)) {
