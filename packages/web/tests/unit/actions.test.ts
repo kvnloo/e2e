@@ -137,6 +137,31 @@ describe('classifyActionError', () => {
     expect(classifyActionError(error, { kind: 'press', key: 'Enter' })).toMatchObject({ code: 'ACTION_MAY_HAVE_COMMITTED' });
   });
 
+  it('does not retry a press after Playwright detached once but dispatched on a later attempt', () => {
+    // Playwright may first retry a detached input, then press Enter and time
+    // out waiting for the navigation the key began.
+    const dispatched = new Error(
+      'locator.press: Timeout 2000ms exceeded.\\nCall log:\\n' +
+      '  - element was detached from the DOM, retrying\\n' +
+      '  - elementHandle.press("Enter")\\n',
+    );
+    dispatched.name = 'TimeoutError';
+    const result = classifyActionError(dispatched, { kind: 'press', key: 'Enter' });
+    expect(result).toMatchObject({ code: 'ACTION_MAY_HAVE_COMMITTED', retryable: false, cause: dispatched });
+
+    // Without the later dispatch marker the detached locator is still safe
+    // to re-resolve and retry.
+    const beforeDispatch = new Error(
+      'locator.press: Timeout 2000ms exceeded.\\nCall log:\\n' +
+      '  - element was detached from the DOM, retrying\\n',
+    );
+    beforeDispatch.name = 'TimeoutError';
+    expect(classifyActionError(beforeDispatch, { kind: 'press', key: 'Enter' })).toMatchObject({
+      code: 'NODE_STALE',
+      retryable: true,
+    });
+  });
+
   it('keeps a bare timeout without a call log a plain actionability miss', () => {
     const error = new Error('Timeout 5000ms exceeded');
     error.name = 'TimeoutError';
