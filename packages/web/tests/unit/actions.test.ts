@@ -259,6 +259,42 @@ describe('dispatchLocatorAction', () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
   });
 
+  it.each([true, false])('refuses cancelled file upload before dispatch (direct input: %s)', async (direct) => {
+    const controller = new AbortController();
+    const { target, element, page } = stubUpload(direct);
+    element.evaluate.mockImplementation(async () => {
+      controller.abort();
+      return direct;
+    });
+    await expect(dispatchLocatorAction(
+      target,
+      { kind: 'setInputFiles', paths: ['/tmp/a.txt'] },
+      { timeoutMs: 1_000, signal: controller.signal },
+      lookup,
+    )).rejects.toMatchObject({ code: 'CANCELLED' });
+    expect(element.setInputFiles).not.toHaveBeenCalled();
+    expect(element.click).not.toHaveBeenCalled();
+    expect(page.waitForEvent).not.toHaveBeenCalled();
+  });
+
+  it('does not upload files when a chooser resolves after cancellation', async () => {
+    const controller = new AbortController();
+    const { target, element, page, chooser } = stubUpload(false);
+    let resolveChooser: (value: unknown) => void = () => undefined;
+    page.waitForEvent.mockImplementation(() => new Promise((resolve) => { resolveChooser = resolve; }));
+    const pending = dispatchLocatorAction(
+      target,
+      { kind: 'setInputFiles', paths: ['/tmp/a.txt'] },
+      { timeoutMs: 1_000, signal: controller.signal },
+      lookup,
+    );
+    await vi.waitFor(() => { expect(element.click).toHaveBeenCalledOnce(); });
+    controller.abort();
+    resolveChooser(chooser);
+    await expect(pending).rejects.toMatchObject({ code: 'CANCELLED' });
+    expect(chooser.setFiles).not.toHaveBeenCalled();
+  });
+
   it('scrolls a node with a wheel gesture sized by its own box: the agent node scroll', async () => {
     const { locator, target, wheel, frame } = stubLocator({ x: 0, y: 0, width: 400, height: 300 });
     await dispatchLocatorAction(target, { kind: 'swipe', direction: 'down' }, OPERATION, lookup);
