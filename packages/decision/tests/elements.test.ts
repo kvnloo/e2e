@@ -133,6 +133,27 @@ describe('element table', () => {
     const none = spaceFor([{ id: 'a', role: 'button', name: 'Add' }], ['tap']);
     expect(none.controls.size).toBe(0);
   });
+  it('offers engine-proven scroll containers beside the viewport', async () => {
+    const fixture = context({ verbs: ['scroll'] });
+    const space = actionSpace(fixture.ctx, {
+      path: '/feed',
+      viewport: { width: 800, height: 600 },
+      tree: tree([
+        {
+          id: 'feed',
+          role: 'group',
+          states: { scrollable: true },
+          rect: { x: 20, y: 20, width: 760, height: 480 },
+          children: [{ id: 'row', role: 'text', text: 'Item 1' }],
+        },
+      ]),
+    }, true);
+    const down = space.controls.get('scroll_down');
+    expect([...(down?.keys() ?? [])]).toEqual(['viewport', 'node:feed']);
+    expect(down?.get('node:feed')?.description).toContain('containing "Item 1"');
+    await down?.get('node:feed')?.run();
+    expect(fixture.actions.scroll).toHaveBeenCalledWith('down', { id: 'feed' });
+  });
 });
 describe('fingerprint', () => {
   const page = (): ExecutorNode => ({ id: 'root', children: [

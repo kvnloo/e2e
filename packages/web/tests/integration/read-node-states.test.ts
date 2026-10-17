@@ -51,6 +51,16 @@ async function disabledByTestId(): Promise<Map<string, boolean>> {
   );
 }
 
+/** The `scrollable` state per test id, `false` when the node reports none. */
+async function scrollableByTestId(): Promise<Map<string, boolean>> {
+  const { tree } = await capture();
+  return new Map(
+    flatten(tree)
+      .filter((node) => node.testId !== undefined)
+      .map((node) => [node.testId!, node.states?.scrollable === true]),
+  );
+}
+
 /** Playwright's answer for the same elements, the reference the reader must agree with. */
 async function expectAgreesWithPlaywright(states: Map<string, boolean>): Promise<void> {
   for (const [testId, disabled] of states) {
@@ -154,5 +164,31 @@ describe('disabled state', () => {
     });
     states.delete('host');
     await expectAgreesWithPlaywright(states);
+  });
+});
+
+
+describe('scrollable state', () => {
+  it('comes from real overflow geometry, not the element role or test id', async () => {
+    await page.setContent(`
+      <div data-testid="scrolls" style="height: 80px; overflow: auto">
+        <div style="height: 240px">long content</div>
+      </div>
+      <div data-testid="hidden-overflow" style="height: 80px; overflow: hidden">
+        <div style="height: 240px">long but wheel-clipped</div>
+      </div>
+      <div data-testid="fits" style="height: 80px; overflow: auto">
+        <div style="height: 40px">fits</div>
+      </div>
+      <div data-testid="horizontal-only" style="width: 80px; height: 80px; overflow-x: auto; overflow-y: hidden">
+        <div style="width: 240px; height: 40px">sideways only</div>
+      </div>
+    `);
+    expect(Object.fromEntries(await scrollableByTestId())).toMatchObject({
+      scrolls: true,
+      'hidden-overflow': false,
+      fits: false,
+      'horizontal-only': false,
+    });
   });
 });

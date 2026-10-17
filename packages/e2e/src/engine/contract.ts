@@ -156,12 +156,14 @@ export interface SemanticNode {
   readonly inputPurpose?: 'username' | 'password' | 'one-time-code' | 'generic-secret' | 'none';
   /**
    * Boolean states the platform reports. `pressed` is a toggle button's
-   * pressed state; `secure` marks a field whose value is never observed.
+   * pressed state; `secure` marks a field whose value is never observed;
+   * `scrollable` means the engine has evidence that a swipe on this node can
+   * move its own scroll surface rather than only the viewport.
    */
   readonly states?: Readonly<
     Partial<
       Record<
-        'checked' | 'disabled' | 'selected' | 'expanded' | 'pressed' | 'focused' | 'hidden' | 'secure',
+        'checked' | 'disabled' | 'selected' | 'expanded' | 'pressed' | 'focused' | 'hidden' | 'secure' | 'scrollable',
         boolean
       >
     >

@@ -209,6 +209,8 @@ describe('snapshot projection', () => {
       'button',
       'textbox',
     ]);
+    expect(projected.index[3]?.node.states).toMatchObject({ scrollable: true });
+    expect(projected.index[13]?.node.states).toMatchObject({ scrollable: true });
     expect(projected.index[6]?.node.states).toEqual({ secure: true });
     expect(projected.viewport).toEqual({ width: 390, height: 844 });
     expect(screenTitle(projected)).toBe('Settings');
@@ -308,6 +310,7 @@ describe('snapshot projection', () => {
       'tablist',
       'list',
     ]);
+    expect(projected.index[11]?.node.states).toMatchObject({ scrollable: true });
   });
 
   it('names an Android node by its content description, keeps its text, and reads heading, role description, checked, and placeholder', () => {

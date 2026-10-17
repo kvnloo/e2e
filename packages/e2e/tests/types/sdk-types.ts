@@ -49,7 +49,7 @@ import {
   beforeEach,
   describe,
 } from '../../src/index.ts';
-import type { Engine, EngineAttemptContext, EngineHandle, EngineObserveOptions, EngineSnapshot } from '../../src/engine/index.ts';
+import type { Engine, EngineAttemptContext, EngineHandle, EngineObserveOptions, EngineSnapshot, SemanticNode } from '../../src/engine/index.ts';
 import { createToolLoopExecutor, defineTool } from '../../src/agent/public.ts';
 import type { Report } from '../../src/index.ts';
 import type { LanguageModelV2, LanguageModelV3, LanguageModelV4 } from '@ai-sdk/provider';
@@ -89,6 +89,8 @@ customSnapshot satisfies EngineSnapshot;
 customExecutorObservation satisfies ExecutorObservation;
 declare const engineSnapshot: EngineSnapshot;
 engineSnapshot.treeUnavailable satisfies true | undefined;
+declare const semanticNode: SemanticNode;
+semanticNode.states?.scrollable satisfies boolean | undefined;
 // @ts-expect-error unavailable semantics are explicitly true or absent, never a separate false state.
 ({ ...engineSnapshot, treeUnavailable: false }) satisfies EngineSnapshot;
 

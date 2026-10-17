@@ -178,9 +178,7 @@ async function run(
     answers: Record<string, Decision>,
     space: ActionSpace,
   ): { taken: Taken; targetAnswer?: Decision } {
-    const control = space.controls.get(choice as Control);
-    if (control !== undefined) return { taken: { target: control, operation: choice, elementKey: '' } };
-    const group = space.targets.get(choice as Operation);
+    const group = space.controls.get(choice as Control) ?? space.targets.get(choice as Operation);
     if (group === undefined) throw invalid('The decision model chose an unavailable operation.');
     if (group.size === 1) {
       const only = group.entries().next();
