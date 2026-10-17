@@ -1133,18 +1133,14 @@ export const readSemanticsFunction = <Mode extends SemanticMode>(
   };
 
   /**
-   * Whether a wheel/swipe started inside this element can move the element's
-   * own scroll surface. This is layout evidence from the platform, not a role
-   * guess: content must exceed the client box on an axis whose computed
-   * overflow accepts user scrolling.
+   * Whether this node can receive a vertical wheel/swipe. The decision
+   * executor currently offers up/down, not left/right: a horizontal-only
+   * scroller is not a valid target for those actions.
    */
   const isScrollable = (el: Element, style: CSSStyleDeclaration | undefined): boolean => {
     if (style === undefined) return false;
     const accepts = (value: string): boolean => value === 'auto' || value === 'scroll' || value === 'overlay';
-    return (
-      (accepts(style.overflowY) && el.scrollHeight > el.clientHeight + 1) ||
-      (accepts(style.overflowX) && el.scrollWidth > el.clientWidth + 1)
-    );
+    return accepts(style.overflowY) && el.scrollHeight > el.clientHeight + 1;
   };
 
   const describe = (el: Element, style = styleOf(el)): RawNodeData => {
