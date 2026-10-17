@@ -363,6 +363,7 @@ function tellHarness(call: () => void): void {
 export class AgentDeviceSurface {
   private client: AgentDeviceClient | undefined;
   private attempt: Attempt | undefined;
+  /** Retained across attempt cleanup until a stop or native session reset is confirmed. */
   private recording: Recording | undefined;
   /** The attempt's `EngineAttemptContext.screen`, which locate captures feed; undefined between attempts. */
   private screenSink: ((snapshot: EngineSnapshot) => void) | undefined;
