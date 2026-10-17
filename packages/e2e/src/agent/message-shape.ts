@@ -1,63 +1,55 @@
 /**
- * What a message holds, as the model reads it, for telling a rewritten
- * message from one carried forward. Anthropic binds a thinking block to the
- * messages before it and rejects a replay after any of them changed, so the
- * loop compares each turn's history with what the last request sent: by
- * value, since an executor may edit a message through the object it was
- * handed or hand back a clone of a history it did not change.
+ * Model-message content fingerprint for detecting edits to a signed thinking
+ * prefix without retaining another copy of the history, including screenshots.
+ * Provider metadata is excluded: moved cache breakpoints and signatures are
+ * not changes to the model-visible content.
  */
 
+import { createHash } from 'node:crypto';
 import type { ModelMessage } from 'ai';
 
-/** A message's content serialized without provider options, and its binary payloads copied. */
-export interface MessageShape {
-  readonly text: string;
-  readonly binaries: readonly Uint8Array[];
-}
+/** SHA-256 digest of one model-visible message. */
+export type MessageShape = string;
 
-/** Keys a message carries for the provider, not for the model: a moved cache breakpoint or a signature is no edit. */
 const PROVIDER_KEYS = new Set(['providerOptions', 'providerMetadata']);
 
-/** The shape of one message. Bytes are copied, so an edit to the live array after the snapshot still shows. */
+/**
+ * Hashes a message's content as read by the model. Binary payload bytes enter
+ * the digest synchronously, so a subsequent in-place edit changes the next
+ * shape even if the same Uint8Array object is reused.
+ */
 export function shapeOf(message: ModelMessage): MessageShape {
-  const binaries: Uint8Array[] = [];
-  const chunks: string[] = [];
+  const hash = createHash('sha256');
+  const write = (value: string | undefined): void => { hash.update(value ?? ''); };
   const walk = (value: unknown): void => {
     if (value instanceof Uint8Array) {
-      binaries.push(Uint8Array.from(value));
-      chunks.push(`<bytes ${String(value.byteLength)}>`);
+      write(`<bytes ${String(value.byteLength)}>`);
+      hash.update(value);
     } else if (value instanceof ArrayBuffer) {
       walk(new Uint8Array(value));
     } else if (Array.isArray(value)) {
-      chunks.push('[');
+      write('[');
       for (const item of value) walk(item);
-      chunks.push(']');
+      write(']');
     } else if (typeof value === 'object' && value !== null && !(value instanceof URL)) {
-      chunks.push('{');
+      write('{');
       for (const [key, item] of Object.entries(value)) {
         if (PROVIDER_KEYS.has(key) || item === undefined) continue;
-        chunks.push(JSON.stringify(key), ':');
+        write(JSON.stringify(key));
+        write(':');
         walk(item);
       }
-      chunks.push('}');
+      write('}');
     } else {
-      chunks.push(JSON.stringify(value instanceof URL ? value.href : value), ',');
+      write(JSON.stringify(value instanceof URL ? value.href : value));
+      write(',');
     }
   };
   walk(message);
-  return { text: chunks.join(''), binaries };
+  return hash.digest('hex');
 }
 
-/** Whether two shapes send the model the same message. */
+/** Whether two snapshots carry the same model-visible message. */
 export function sameShape(a: MessageShape, b: MessageShape): boolean {
-  return a.text === b.text && a.binaries.length === b.binaries.length && a.binaries.every((bytes, index) => sameBytes(bytes, b.binaries[index]!));
-}
-
-/** Whether two payloads hold the same bytes. */
-function sameBytes(a: Uint8Array, b: Uint8Array): boolean {
-  if (a.byteLength !== b.byteLength) return false;
-  for (let index = 0; index < a.byteLength; index += 1) {
-    if (a[index] !== b[index]) return false;
-  }
-  return true;
+  return a === b;
 }
