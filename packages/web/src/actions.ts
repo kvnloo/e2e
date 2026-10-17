@@ -18,7 +18,7 @@ import {
   targetPage,
   type ActionTarget,
 } from './support.ts';
-import type { ConnectionBudget } from './operation-budget.ts';
+import { connectionAbort, type ConnectionBudget } from './operation-budget.ts';
 
 /** How long a long press holds the button when the action names no duration. */
 const DEFAULT_LONG_PRESS_MS = 500;
@@ -107,16 +107,25 @@ function isRadio(element: ElementHandle<Element>): Promise<boolean> {
 async function uploadFiles(target: ActionTarget, paths: readonly string[], operation: ConnectionBudget): Promise<void> {
   const deadline = new Deadline(operation.timeoutMs);
   const remaining = (): number => Math.max(1, deadline.remaining());
+  // The outer operation guard can abandon the chooser wait. Never upload
+  // files after a cancelled or timed-out step releases the worker.
+  const ensureActive = (): void => {
+    if (operation.signal.aborted) throw connectionAbort(operation.signal, 'upload');
+  };
   const element =
     target.kind === 'element' ? target.element : await target.locator.elementHandle({ timeout: operation.timeoutMs });
   try {
-    if (await isFileInput(element)) {
+    const direct = await isFileInput(element);
+    ensureActive();
+    if (direct) {
       await element.setInputFiles([...paths], { timeout: remaining() });
       return;
     }
     const page = await targetPage(target);
+    ensureActive();
     const opened = page.waitForEvent('filechooser', { timeout: remaining() });
     opened.catch(() => undefined);
+    ensureActive();
     await element.click({ timeout: remaining() });
     const chooser = await opened.catch((cause: unknown) => {
       if (!isPwTimeout(cause)) throw cause;
@@ -125,6 +134,7 @@ async function uploadFiles(target: ActionTarget, paths: readonly string[], opera
         cause,
       });
     });
+    ensureActive();
     await chooser.setFiles([...paths], { timeout: remaining() });
   } finally {
     if (target.kind === 'locator') void element.dispose().catch(() => undefined);

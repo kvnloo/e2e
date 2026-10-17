@@ -187,7 +187,7 @@ function stubUpload(fileInput: boolean) {
     }),
   };
   const element = {
-    evaluate: vi.fn(async () => fileInput),
+    evaluate: vi.fn(async (_predicate: (node: Element) => boolean) => fileInput),
     setInputFiles: vi.fn(async (_paths: string[], _options: unknown) => undefined),
     click: vi.fn(async (_options: unknown) => void calls.push('click')),
     dispose: vi.fn(async () => undefined),
@@ -237,6 +237,33 @@ describe('dispatchLocatorAction', () => {
     expect(page.waitForEvent).not.toHaveBeenCalled();
   });
 
+  it('recognizes a label associated with a file input instead of opening a chooser', async () => {
+    // Execute isFileInput's actual evaluate callback. A stub that always
+    // answers true cannot protect the production label-control lookup.
+    class FileInput {
+      readonly type = 'file';
+    }
+    vi.stubGlobal('HTMLInputElement', FileInput);
+    try {
+      const { element, target, page } = stubUpload(false);
+      const label = {
+        closest: (selector: string) => selector === 'label' ? { control: new FileInput() } : null,
+      } as unknown as Element;
+      element.evaluate.mockImplementation(async (predicate) => predicate(label));
+      await dispatchLocatorAction(
+        target,
+        { kind: 'setInputFiles', paths: ['/tmp/a.txt'] },
+        { timeoutMs: 1_000, signal: new AbortController().signal },
+        lookup,
+      );
+      expect(element.setInputFiles).toHaveBeenCalledWith(['/tmp/a.txt'], { timeout: expect.any(Number) });
+      expect(element.click).not.toHaveBeenCalled();
+      expect(page.waitForEvent).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('fails as NOT_ACTIONABLE when the click opens no file chooser', async () => {
     const { target, page } = stubUpload(false);
     page.waitForEvent.mockRejectedValue(Object.assign(new Error('Timeout 7ms exceeded'), { name: 'TimeoutError' }));
@@ -257,6 +284,42 @@ describe('dispatchLocatorAction', () => {
     ).rejects.toThrow('element is not enabled');
     rejectChooser(Object.assign(new Error('Timeout 7ms exceeded'), { name: 'TimeoutError' }));
     await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+
+  it.each([true, false])('refuses cancelled file upload before dispatch (direct input: %s)', async (direct) => {
+    const controller = new AbortController();
+    const { target, element, page } = stubUpload(direct);
+    element.evaluate.mockImplementation(async () => {
+      controller.abort();
+      return direct;
+    });
+    await expect(dispatchLocatorAction(
+      target,
+      { kind: 'setInputFiles', paths: ['/tmp/a.txt'] },
+      { timeoutMs: 1_000, signal: controller.signal },
+      lookup,
+    )).rejects.toMatchObject({ code: 'CANCELLED' });
+    expect(element.setInputFiles).not.toHaveBeenCalled();
+    expect(element.click).not.toHaveBeenCalled();
+    expect(page.waitForEvent).not.toHaveBeenCalled();
+  });
+
+  it('does not upload files when a chooser resolves after cancellation', async () => {
+    const controller = new AbortController();
+    const { target, element, page, chooser } = stubUpload(false);
+    let resolveChooser: (value: unknown) => void = () => undefined;
+    page.waitForEvent.mockImplementation(() => new Promise((resolve) => { resolveChooser = resolve; }));
+    const pending = dispatchLocatorAction(
+      target,
+      { kind: 'setInputFiles', paths: ['/tmp/a.txt'] },
+      { timeoutMs: 1_000, signal: controller.signal },
+      lookup,
+    );
+    await vi.waitFor(() => { expect(element.click).toHaveBeenCalledOnce(); });
+    controller.abort();
+    resolveChooser(chooser);
+    await expect(pending).rejects.toMatchObject({ code: 'CANCELLED' });
+    expect(chooser.setFiles).not.toHaveBeenCalled();
   });
 
   it('scrolls a node with a wheel gesture sized by its own box: the agent node scroll', async () => {
