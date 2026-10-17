@@ -244,6 +244,11 @@ class SchedulerWorker {
     this.killAfter(graceMs);
   }
 
+  /** Revokes a retired worker's reuse permission without restarting its kill deadline. */
+  revokeReuse(): void {
+    if (this.runner.alive) this.runner.send({ type: 'shutdown' });
+  }
+
   /**
    * Asks for immediate engine disposal and force-kills once the budget is
    * spent, replacing the interrupt grace a busy worker was given.
@@ -499,6 +504,12 @@ class Scheduler {
     }
   }
 
+  /**
+   * The forced interrupt: no worker gets to finish its unit any more. Each
+   * busy one disposes its engine now and is killed after the force budget,
+   * however long the unit's own grace still had to run. A live retired
+   * worker also receives it to revoke resource reuse during disposal.
+   */
   private broadcastForce(): void {
     if (!this.options.forceSignal.aborted || this.forceBroadcast) return;
     this.forceBroadcast = true;
@@ -701,7 +712,12 @@ class Scheduler {
    * it first, and the others only ever retire idle workers.
    */
   private retire(worker: SchedulerWorker, preserveResources: boolean): void {
-    if (worker.state === 'retired' && preserveResources) return;
+    if (worker.state === 'retired') {
+      // A final interrupt can withdraw reuse permission while the earlier
+      // replacement retirement is still disposing its engine.
+      if (!preserveResources) worker.revokeReuse();
+      return;
+    }
     worker.state = 'retired';
     worker.shutdown(SHUTDOWN_GRACE_MS, preserveResources);
   }

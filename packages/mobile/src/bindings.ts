@@ -46,6 +46,10 @@ export interface SlotBinding {
   readonly client?: DeviceClientConfig | undefined;
   /** App a provider already installed from `appPath`, so the worker installs nothing and opens this. */
   readonly installedApp?: string | undefined;
+  /**
+   * The slot's provider lease id. The engine uses it to retain healthy
+   * sessions across worker replacement and to find the lease for `record`.
+   */
   readonly leaseId?: string | undefined;
 }
 

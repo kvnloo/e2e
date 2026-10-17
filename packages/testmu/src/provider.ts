@@ -193,6 +193,8 @@ export function testmu(options: TestmuOptions): DeviceProvider {
             leaseBackend,
             leaseProvider: PROVIDER,
             ttlMs: LEASE_TTL_MS,
+            // Retain the provider lease when closeApp or cleanup closes the engine session.
+            // The provider releases the lease at run end.
             retainOnClose: true,
             ...selectors,
           },

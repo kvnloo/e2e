@@ -709,6 +709,7 @@ await device.openApp('com.example.app'); // launches fresh, on its first screen
 ```
 
 - A screen query before the next `openApp` is `APP_NOT_OPEN` too.
+- If a previous attempt left a native screen recording unfinished, the next attempt resets it by closing the agent-device session. On a leased device, that also drops the session's device claim, even when worker reuse was otherwise permitted. The provider lease itself is released at run end.
 
 #### `clearKeychain`
 
