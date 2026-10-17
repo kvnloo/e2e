@@ -180,11 +180,15 @@ describe('scrollable state', () => {
       <div data-testid="fits" style="height: 80px; overflow: auto">
         <div style="height: 40px">fits</div>
       </div>
+      <div data-testid="horizontal-only" style="width: 80px; height: 80px; overflow-x: auto; overflow-y: hidden">
+        <div style="width: 240px; height: 40px">sideways only</div>
+      </div>
     `);
     expect(Object.fromEntries(await scrollableByTestId())).toMatchObject({
       scrolls: true,
       'hidden-overflow': false,
       fits: false,
+      'horizontal-only': false,
     });
   });
 });
