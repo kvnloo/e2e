@@ -205,6 +205,13 @@ export class DevicePool {
     return { workers: bindings.length, env: { [bindingsVariable(info.targetName)]: encodeBindings(bindings) } };
   }
 
+  /**
+   * Closes every engine session `warm` opened for the target and releases
+   * what the source acquired. This is the normal run-end close for leased
+   * slots and a fallback for local sessions or a failed `prepare`. Session
+   * closes and source release run concurrently under the hook's cleanup
+   * budget, so a hung close does not delay lease release.
+   */
   async finish(info: EngineFinishInfo): Promise<void> {
     const clients = this.warmed.get(info.targetName) ?? [];
     this.warmed.delete(info.targetName);
