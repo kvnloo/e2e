@@ -45,13 +45,24 @@ describe('message shapes', () => {
     expect(sameShape(shapeOf({ role: 'user', content: 'x' }), shapeOf({ role: 'assistant', content: 'x' }))).toBe(false);
   });
 
-  it('keep a copy of the bytes, so an edit to the live array after the snapshot shows', () => {
+  it('keeps a bounded digest that detects an in-place binary edit', () => {
     const message = screenshot();
     const before = shapeOf(message);
+    expect(before).toMatch(/^[a-f0-9]{64}$/u);
     const data = (message.content as { data: Uint8Array }[])[1]!.data;
     data[0] = 0;
     expect(sameShape(before, shapeOf(message))).toBe(false);
     expect(sameShape(before, shapeOf(screenshot()))).toBe(true);
+  });
+
+  it('keeps a fixed-size fingerprint for a large screenshot without copying it into the snapshot', () => {
+    const content = new Uint8Array(2 * 1024 * 1024).fill(42);
+    const message: ModelMessage = { role: 'user', content: [{ type: 'file', data: content, mediaType: 'image/png' }] };
+    const before = shapeOf(message);
+    expect(before).toHaveLength(64);
+    expect(sameShape(before, shapeOf(structuredClone(message)))).toBe(true);
+    content[content.length - 1] ^= 1;
+    expect(sameShape(before, shapeOf(message))).toBe(false);
   });
 
   it('differ for payloads of another length or content, and for a file named by URL against one sent as bytes', () => {
