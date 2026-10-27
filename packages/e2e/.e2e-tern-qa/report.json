@@ -1,0 +1,474 @@
+{
+  "schemaVersion": "report-1",
+  "run": {
+    "id": "01a112d6-e863-78a9-b6cd-f186f9077ccd",
+    "specVersion": "0.1",
+    "runner": {
+      "name": "e2e",
+      "version": "0.16.0"
+    },
+    "status": "failed",
+    "exitCode": 1,
+    "startedAt": "2026-10-06T20:10:36.534Z",
+    "finishedAt": "2026-10-06T20:11:21.003Z",
+    "project": {
+      "id": "e2e",
+      "configDigest": "89af5faa681b29e2f87f82b359668a2e655cce86f5ff3d01c4dbdfaf0b49e4d6"
+    },
+    "environment": {
+      "ci": false,
+      "trustNoticeShown": false,
+      "os": "linux 7.2.2-1-cachyos",
+      "arch": "x64",
+      "runtime": "node v26.5.0"
+    },
+    "vcs": {
+      "commit": "1afd2d5d7aada9ad640bce7e7e0b92f646677541",
+      "branch": "feat/tern-engine",
+      "dirty": true
+    },
+    "targets": [
+      {
+        "id": "hermes-tern",
+        "index": 0,
+        "platform": "desktop",
+        "environment": "test",
+        "engine": {
+          "name": "tern",
+          "version": "0.0.1",
+          "spiVersion": 1
+        },
+        "capabilities": [
+          "actions",
+          "keyboard",
+          "location",
+          "observation"
+        ],
+        "artifactCapabilities": [],
+        "stateCapability": false
+      }
+    ],
+    "serialGroups": [],
+    "results": [
+      {
+        "id": "fa7f1a4c1636c22be603d6d6757e036c045510ee8812be6387f2df8cc8420e02",
+        "testId": "explore::QA%20the%20Hermes%20Tern%20frontend.%20Figure%20out%20a%20repeatable%20test%20for%20each%20feature%20and%20report%20defects%20with%20evidence.%20Cover%20a%20collapsed%20card%20preview%20and%20more-lines%20badge%2C%20a%20failed%20shell%20that%20stays%20error%20and%20shows%20an%20exit%20code%2C%20approval%20clarify%20and%20secret%20overlays%20that%20do%20not%20answer%20themselves%2C%20the%20resume%20overlay%2C%20the%20model%20picker%2C%20a%20busy%20turn%20that%20does%20not%20close%20the%20surface%2C%20and%20distinct%20syntax%20colors.%20Do%20not%20approve%20a%20dangerous%20command.%20Do%20not%20type%20a%20secret.%20If%20the%20capture%20cannot%20show%20a%20feature%2C%20report%20that%20limit%20and%20name%20the%20command%20that%20would%20prove%20it.",
+        "kind": "test",
+        "declarationIndex": 0,
+        "titlePath": [
+          "QA the Hermes Tern frontend. Figure out a repeatable test for each feature and report defects with evidence. Cover a collapsed card preview and more-lines badge, a failed shell that stays error and shows an exit code, approval clarify and secret overlays that do not answer themselves, the resume overlay, the model picker, a busy turn that does not close the surface, and distinct syntax colors. Do not approve a dangerous command. Do not type a secret. If the capture cannot show a feature, report that limit and name the command that would prove it."
+        ],
+        "file": "explore",
+        "source": {
+          "file": "explore",
+          "line": 1,
+          "column": 1
+        },
+        "targetId": "hermes-tern",
+        "platform": "desktop",
+        "agent": "default",
+        "repeat": 0,
+        "tags": [],
+        "selected": true,
+        "status": "failed",
+        "attempts": [
+          {
+            "id": "01a112d6-e87b-7beb-87e1-558ee3807148",
+            "index": 0,
+            "status": "failed",
+            "startedAt": "2026-10-06T20:10:36.540Z",
+            "durationMs": 44460,
+            "artifacts": [
+              {
+                "id": "01a112d6-e87b-7beb-87e1-558ee3807148:artifact:0",
+                "kind": "log",
+                "mediaType": "text/plain",
+                "redaction": "complete",
+                "producer": {
+                  "kind": "attempt"
+                },
+                "path": "hermes-tern/explore-qa-the-hermes-tern-frontend-f2c0c56f824ad07e/default/attempt-0/failure/screen.txt",
+                "size": 246,
+                "sha256": "5212a4702a61b20d6ce5f4fa4e4df6e4255bc6e36ce8ff0cbbd51ea8fd28d7cc"
+              }
+            ],
+            "error": {
+              "category": "test",
+              "code": "ASSERTION_FAILED",
+              "message": "exploration found 1 issue(s): [severity 5] Navigation menu missing, app inaccessible",
+              "retryable": false,
+              "phase": "body",
+              "source": {
+                "file": "dist/explore/body.js",
+                "line": 173,
+                "column": 15
+              }
+            },
+            "secondaryErrors": [],
+            "cleanup": "complete",
+            "failure": {
+              "url": "tern:40548786241537",
+              "screen": "01a112d6-e87b-7beb-87e1-558ee3807148:artifact:0"
+            },
+            "steps": [
+              {
+                "id": "01a112d6-e87b-7beb-87e1-558ee3807148:0",
+                "index": 0,
+                "kind": "agent",
+                "api": "agent.extract",
+                "label": "Plan the next step of an exploratory test run, or finish it.\n\nGoal: QA the Hermes Tern frontend. Figure out a repeatable test for each feature and report defects with evidence. Cover a collapsed card preview and more-lines badge, a failed shell that stays error and shows an exit code, approval clarify and secret overlays that do not answer themselves, the resume overlay, the model picker, a busy turn that does not close the surface, and distinct syntax colors. Do not approve a dangerous command. Do not type a secret. If the capture cannot show a feature, report that limit and name the command that would prove it.\nBudget: 0 of 8 steps used, about 10 minute(s) left.\n\nSteps so far:\n(none yet: this is the first step)\n\nFindings so far:\n(none yet)\n\nDecide from the goal, the steps so far, and the current screen:\n- \"step\": the next exploration charter. \"title\" names the area or flow in a few words. \"instruction\" is a concrete,\n  self-contained charter for an agent that sees only the screen and that text: which flow to exercise, what inputs\n  to try, what to check. One flow or screen per step, sized for five to fifteen actions; split anything bigger.\n  Ask the agent to interact, not only to look: submit forms with made-up test data, save and revisit,\n  sign in with the accounts listed above (or made-up credentials when none are configured), act on a non-first item of a list. Prefer breadth: touch the main\n  flows the goal names before drilling deeper into one. Do not re-test an area a passed step already covered, and\n  never plan a step to re-confirm a finding already recorded above. When a step ended at its limit, continue where\n  it stopped or move on. When a step summary mentions something odd that is not among the findings, spend the next\n  step confirming it.\n- \"finish\": the goal is covered, or nothing new is reachable. \"summary\" is the closing assessment.\n  The assessment is two to four plain sentences for the person reading the terminal, where the steps and the findings\n  are already listed above it. Do not list or count the findings again. Say: your verdict on the goal in one sentence;\n  what the goal names that was not reached or not fully exercised, and why; and which one or two flows are most worth\n  turning into scripted tests. Name screens and controls as the app names them; no headings, bullets, or markdown.\nRespond with every field present: {\"decision\": \"step\", \"title\": \"...\", \"instruction\": \"...\", \"summary\": \"\"} or {\"decision\": \"finish\", \"title\": \"\", \"instruction\": \"\", \"summary\": \"...\"}.",
+                "status": "failed",
+                "startedAt": "2026-10-06T20:10:36.544Z",
+                "durationMs": 2491,
+                "events": [
+                  {
+                    "kind": "observation",
+                    "startedAt": "2026-10-06T20:10:36.581Z",
+                    "durationMs": 13,
+                    "status": "passed",
+                    "bytes": 161,
+                    "count": 3
+                  },
+                  {
+                    "kind": "model",
+                    "startedAt": "2026-10-06T20:10:36.595Z",
+                    "durationMs": 918,
+                    "status": "failed",
+                    "name": "agent-extract-2",
+                    "code": "MODEL_OUTPUT_INVALID"
+                  },
+                  {
+                    "kind": "schema",
+                    "startedAt": "2026-10-06T20:10:37.513Z",
+                    "durationMs": 0,
+                    "status": "failed",
+                    "name": "agent-extract-2",
+                    "code": "MODEL_OUTPUT_INVALID"
+                  },
+                  {
+                    "kind": "model",
+                    "startedAt": "2026-10-06T20:10:37.514Z",
+                    "durationMs": 1521,
+                    "status": "passed",
+                    "name": "agent-extract-2",
+                    "count": 2614,
+                    "inputTokens": 1611,
+                    "outputTokens": 1003,
+                    "reasoning": "The user is asking to \"Extract the requested data from the observation.\" This is a new instruction. The instruction says to respond with { \"found\": true/false, etc. } The observation is simple: root window \"40548786241537\", status lines. The user wants to extract requested data. But what requested data? The instruction says \"Extract the requested data from the observation.\" But we have no explicit request of what data to extract. The user likely wants to find something specific: maybe the collapsed card preview, more-lines badge, etc. But observation does not contain any of those. So we need …"
+                  }
+                ],
+                "agent": "default",
+                "artifacts": [],
+                "metrics": {
+                  "modelCalls": 2,
+                  "actionSteps": 0,
+                  "observationBytes": 161,
+                  "contextBytes": 1376,
+                  "ledgerBytes": 0
+                },
+                "model": {
+                  "provider": "groq.chat",
+                  "model": "openai/gpt-oss-20b",
+                  "endpoint": "provider-default",
+                  "adapterVersion": "ai-sdk/0.16.0",
+                  "policyVersion": "policy-0.3",
+                  "calls": 2,
+                  "tokenAccounting": "adapter-upper-bound",
+                  "inputTokens": 1611,
+                  "outputTokens": 1003,
+                  "peakTokensPerCall": 2614,
+                  "cacheReadTokens": 0
+                },
+                "observationRevision": "b1",
+                "explanation": "no collapsed card preview and more-lines badge present",
+                "source": {
+                  "file": "dist/run/steps.js",
+                  "line": 26,
+                  "column": 16
+                },
+                "error": {
+                  "category": "test",
+                  "code": "ASSERTION_INCONCLUSIVE",
+                  "message": "nothing to extract: no collapsed card preview and more-lines badge present",
+                  "retryable": false,
+                  "source": {
+                    "file": "dist/agent/index.js",
+                    "line": 181,
+                    "column": 31
+                  }
+                }
+              },
+              {
+                "id": "01a112d6-e87b-7beb-87e1-558ee3807148:1",
+                "index": 1,
+                "kind": "agent",
+                "api": "agent.act",
+                "label": "Survey the app: visit each top-level page or screen the navigation offers once, note what each one is for and which controls it has, and try one obvious action on each. Report any defect you see on the way.",
+                "status": "failed",
+                "startedAt": "2026-10-06T20:10:39.038Z",
+                "durationMs": 2448,
+                "events": [
+                  {
+                    "kind": "observation",
+                    "startedAt": "2026-10-06T20:10:39.042Z",
+                    "durationMs": 95,
+                    "status": "passed",
+                    "bytes": 161,
+                    "count": 3
+                  },
+                  {
+                    "kind": "observation",
+                    "startedAt": "2026-10-06T20:10:39.138Z",
+                    "durationMs": 99,
+                    "status": "passed",
+                    "bytes": 161,
+                    "count": 3
+                  },
+                  {
+                    "kind": "policy",
+                    "startedAt": "2026-10-06T20:10:39.237Z",
+                    "durationMs": 0,
+                    "status": "failed",
+                    "name": "vision.pixels",
+                    "decision": "denied",
+                    "code": "UNSUPPORTED_CAPABILITY"
+                  },
+                  {
+                    "kind": "observation",
+                    "startedAt": "2026-10-06T20:10:40.897Z",
+                    "durationMs": 96,
+                    "status": "passed",
+                    "bytes": 161,
+                    "count": 3
+                  },
+                  {
+                    "kind": "engine",
+                    "startedAt": "2026-10-06T20:10:40.896Z",
+                    "durationMs": 98,
+                    "status": "passed",
+                    "name": "tool:report_finding"
+                  },
+                  {
+                    "kind": "model",
+                    "startedAt": "2026-10-06T20:10:39.241Z",
+                    "durationMs": 1754,
+                    "status": "passed",
+                    "name": "executor",
+                    "count": 4729,
+                    "inputTokens": 3675,
+                    "outputTokens": 1054,
+                    "reasoning": "We need to execute the test: Survey the app: visit each top-level page or screen the navigation offers once, note what each one is for and which controls it has, and try one obvious action on each. Report any defect.\n\nWe have initial screen: only two line nodes. So likely navigation is not visible. We need to explore. Need to find navigation. Maybe it's a menu or toolbar. There might be a side panel or header. We need to find nodes like \"nav\" or \"menu\". Let's inspect current nodes. It shows only 3 nodes: root, line-0, line-1. That seems incomplete. Maybe navigation is hidden until we open som…"
+                  }
+                ],
+                "agent": "default",
+                "artifacts": [],
+                "metrics": {
+                  "modelCalls": 1,
+                  "actionSteps": 0,
+                  "observationBytes": 161,
+                  "contextBytes": 1376,
+                  "ledgerBytes": 351
+                },
+                "model": {
+                  "provider": "groq.chat",
+                  "model": "openai/gpt-oss-20b",
+                  "endpoint": "provider-default",
+                  "adapterVersion": "executor/e2e-default-agent@2",
+                  "policyVersion": "e2e-default-agent/2",
+                  "calls": 1,
+                  "tokenAccounting": "provider",
+                  "inputTokens": 3675,
+                  "outputTokens": 1054,
+                  "peakTokensPerCall": 4729,
+                  "cacheReadTokens": 0
+                },
+                "observationRevision": "b7",
+                "visionDegraded": "UNSUPPORTED_CAPABILITY",
+                "turns": [
+                  {
+                    "index": 1,
+                    "calls": [
+                      "report_finding({\"title\":\"Navigation menu missing, app inaccessible\",\"kind\":\"issue\",\"severity\":5,\"expected\":\"The application should provide a navigation menu to access different top-level pages.\",\"actu…[truncated]"
+                    ],
+                    "outcome": "[report_finding] Finding 1 recorded (issue, severity 5): Navigation menu missing, app inaccessible. Do not report it again; continue the charter or conclude the step."
+                  }
+                ],
+                "source": {
+                  "file": "dist/run/steps.js",
+                  "line": 26,
+                  "column": 16
+                },
+                "error": {
+                  "category": "infrastructure",
+                  "code": "MODEL_PROVIDER_FAILED",
+                  "message": "the model provider failed: 'messages.2' : for 'role:assistant' the following must be satisfied[('messages.2' : property 'reasoning_content' is unsupported)]",
+                  "retryable": false
+                }
+              },
+              {
+                "id": "01a112d6-e87b-7beb-87e1-558ee3807148:2",
+                "index": 2,
+                "kind": "agent",
+                "api": "agent.extract",
+                "label": "Plan the next step of an exploratory test run, or finish it.\n\nGoal: QA the Hermes Tern frontend. Figure out a repeatable test for each feature and report defects with evidence. Cover a collapsed card preview and more-lines badge, a failed shell that stays error and shows an exit code, approval clarify and secret overlays that do not answer themselves, the resume overlay, the model picker, a busy turn that does not close the surface, and distinct syntax colors. Do not approve a dangerous command. Do not type a secret. If the capture cannot show a feature, report that limit and name the command that would prove it.\nBudget: 1 of 8 steps used, about 10 minute(s) left.\n\nSteps so far:\n1. [FAILED] Survey the app — the model provider failed: 'messages.2' : for 'role:assistant' the following must be satisfied[('messages.2' : property 'reasoning_content' is unsupported)]\n\nFindings so far:\n- [issue, severity 5] Navigation menu missing, app inaccessible\n\nDecide from the goal, the steps so far, and the current screen:\n- \"step\": the next exploration charter. \"title\" names the area or flow in a few words. \"instruction\" is a concrete,\n  self-contained charter for an agent that sees only the screen and that text: which flow to exercise, what inputs\n  to try, what to check. One flow or screen per step, sized for five to fifteen actions; split anything bigger.\n  Ask the agent to interact, not only to look: submit forms with made-up test data, save and revisit,\n  sign in with the accounts listed above (or made-up credentials when none are configured), act on a non-first item of a list. Prefer breadth: touch the main\n  flows the goal names before drilling deeper into one. Do not re-test an area a passed step already covered, and\n  never plan a step to re-confirm a finding already recorded above. When a step ended at its limit, continue where\n  it stopped or move on. When a step summary mentions something odd that is not among the findings, spend the next\n  step confirming it.\n- \"finish\": the goal is covered, or nothing new is reachable. \"summary\" is the closing assessment.\n  The assessment is two to four plain sentences for the person reading the terminal, where the steps and the findings\n  are already listed above it. Do not list or count the findings again. Say: your verdict on the goal in one sentence;\n  what the goal names that was not reached or not fully exercised, and why; and which one or two flows are most worth\n  turning into scripted tests. Name screens and controls as the app names them; no headings, bullets, or markdown.\nRespond with every field present: {\"decision\": \"step\", \"title\": \"...\", \"instruction\": \"...\", \"summary\": \"\"} or {\"decision\": \"finish\", \"title\": \"\", \"instruction\": \"\", \"summary\": \"...\"}.",
+                "status": "failed",
+                "startedAt": "2026-10-06T20:10:41.488Z",
+                "durationMs": 39425,
+                "events": [
+                  {
+                    "kind": "observation",
+                    "startedAt": "2026-10-06T20:10:41.488Z",
+                    "durationMs": 11,
+                    "status": "passed",
+                    "bytes": 161,
+                    "count": 3
+                  },
+                  {
+                    "kind": "model",
+                    "startedAt": "2026-10-06T20:10:41.499Z",
+                    "durationMs": 20372,
+                    "status": "failed",
+                    "name": "agent-extract-2",
+                    "code": "MODEL_OUTPUT_INVALID"
+                  },
+                  {
+                    "kind": "schema",
+                    "startedAt": "2026-10-06T20:11:01.871Z",
+                    "durationMs": 0,
+                    "status": "failed",
+                    "name": "agent-extract-2",
+                    "code": "MODEL_OUTPUT_INVALID"
+                  },
+                  {
+                    "kind": "model",
+                    "startedAt": "2026-10-06T20:11:01.871Z",
+                    "durationMs": 19041,
+                    "status": "failed",
+                    "name": "agent-extract-2",
+                    "code": "MODEL_OUTPUT_INVALID"
+                  },
+                  {
+                    "kind": "schema",
+                    "startedAt": "2026-10-06T20:11:20.912Z",
+                    "durationMs": 0,
+                    "status": "failed",
+                    "name": "agent-extract-2",
+                    "code": "MODEL_OUTPUT_INVALID"
+                  }
+                ],
+                "agent": "default",
+                "artifacts": [],
+                "metrics": {
+                  "modelCalls": 2,
+                  "actionSteps": 0,
+                  "observationBytes": 161,
+                  "contextBytes": 1376,
+                  "ledgerBytes": 0
+                },
+                "model": {
+                  "provider": "groq.chat",
+                  "model": "openai/gpt-oss-20b",
+                  "endpoint": "provider-default",
+                  "adapterVersion": "ai-sdk/0.16.0",
+                  "policyVersion": "policy-0.3",
+                  "calls": 2,
+                  "tokenAccounting": "adapter-upper-bound",
+                  "inputTokens": 0,
+                  "outputTokens": 0,
+                  "peakTokensPerCall": 0
+                },
+                "observationRevision": "b8",
+                "explanation": "response is not an agent-extract-2 object with found, value, and missing",
+                "source": {
+                  "file": "dist/run/steps.js",
+                  "line": 26,
+                  "column": 16
+                },
+                "error": {
+                  "category": "test",
+                  "code": "MODEL_OUTPUT_INVALID",
+                  "message": "response is not an agent-extract-2 object with found, value, and missing",
+                  "retryable": false,
+                  "source": {
+                    "file": "dist/agent/model/sdk.js",
+                    "line": 93,
+                    "column": 32
+                  }
+                }
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "errors": [],
+    "summary": {
+      "discovered": 1,
+      "selected": 1,
+      "executed": 1,
+      "passed": 0,
+      "failed": 1,
+      "interrupted": 0,
+      "flaky": 0,
+      "skipped": 0
+    },
+    "limits": {
+      "maxAgentContextBytes": 16384,
+      "maxLedgerBytes": 8192,
+      "maxObservationBytes": 262144,
+      "maxEventsPerStep": 1000,
+      "maxModelTokensPerCall": 64000
+    },
+    "usage": {
+      "discoveredResults": 1,
+      "maxAgentContextBytes": 1376,
+      "maxLedgerBytes": 351,
+      "maxObservationBytes": 161,
+      "artifactBytes": 246,
+      "downloads": 0,
+      "events": 15,
+      "modelTokens": 7343,
+      "maxModelCallsInStep": 2,
+      "maxActionStepsInStep": 0,
+      "modelCachedTokens": 0
+    },
+    "explore": {
+      "goal": "QA the Hermes Tern frontend. Figure out a repeatable test for each feature and report defects with evidence. Cover a collapsed card preview and more-lines badge, a failed shell that stays error and shows an exit code, approval clarify and secret overlays that do not answer themselves, the resume overlay, the model picker, a busy turn that does not close the surface, and distinct syntax colors. Do not approve a dangerous command. Do not type a secret. If the capture cannot show a feature, report that limit and name the command that would prove it.",
+      "budgets": {
+        "maxSteps": 8,
+        "timeoutMs": 600000
+      },
+      "ended": "aborted",
+      "steps": [
+        {
+          "index": 1,
+          "title": "Survey the app",
+          "instruction": "Survey the app: visit each top-level page or screen the navigation offers once, note what each one is for and which controls it has, and try one obvious action on each. Report any defect you see on the way.",
+          "status": "failed",
+          "summary": "the model provider failed: 'messages.2' : for 'role:assistant' the following must be satisfied[('messages.2' : property 'reasoning_content' is unsupported)]",
+          "errorCode": "MODEL_PROVIDER_FAILED",
+          "startedAt": "2026-10-06T20:10:39.036Z",
+          "durationMs": 2451
+        }
+      ],
+      "findings": [
+        {
+          "id": "01a112d6-f9e1-7b9c-9ef0-b1c0c283b700",
+          "index": 0,
+          "step": 1,
+          "kind": "issue",
+          "severity": 5,
+          "title": "Navigation menu missing, app inaccessible",
+          "expected": "The application should provide a navigation menu to access different top-level pages.",
+          "actual": "No navigation menu or top-level links visible.",
+          "reproduction": [
+            "Open the Hermes Tern frontend"
+          ],
+          "path": "40548786241537",
+          "observationRevision": "b7",
+          "reportedAt": "2026-10-06T20:10:40.993Z"
+        }
+      ]
+    }
+  }
+}

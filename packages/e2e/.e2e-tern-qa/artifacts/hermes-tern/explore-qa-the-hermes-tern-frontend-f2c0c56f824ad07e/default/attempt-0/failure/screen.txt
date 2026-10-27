@@ -1,0 +1,9 @@
+# Screen at failure
+url: tern:40548786241537
+revision: b9
+viewport: 80x24
+nodes: 3
+
+#root window "40548786241537"
+ #line-0 status "hermes"
+ #line-1 status "Set display.bell_on_complete: true in config.yaml to hear a bell when long tasks finish."
