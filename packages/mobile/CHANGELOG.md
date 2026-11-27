@@ -1,5 +1,23 @@
 # @e2e-dev/mobile
 
+## 0.12.10
+
+### Patch Changes
+
+- [#2304](https://github.com/e2e-inc/e2e/pull/2304) [`342e95a`](https://github.com/e2e-inc/e2e/commit/342e95abebc188d7ee553b16643c9dac5cdcae50) Thanks [@okwasniewski](https://github.com/okwasniewski)! - Bump `agent-device`, `@agent-device/revyl`, and `@agent-device/testmu` to 0.21.43, `@vitest/expect` to 5.1.2, and `@agentclientprotocol/sdk` to 2.12.0.
+
+- [#2299](https://github.com/e2e-inc/e2e/pull/2299) [`62f97e0`](https://github.com/e2e-inc/e2e/commit/62f97e04bc2c3aaf1d3992bd7dc166a0420e062d) Thanks [@kdy1](https://github.com/kdy1)! - `device.lock()` and `device.unlock()` lock and unlock the screen of an Android 11 or newer device or an iOS simulator, each as a recorded step that returns once the device reports the new state. `unlock()` never enters a PIN, pattern, password, or passcode: a lock that asks for one is `UNSUPPORTED_CAPABILITY`, and so is a physical iPhone or iPad, a TV, and, for `lock()` on Android 16 or newer, a screen lock set to None. On Android 11 to 15, `lock()` with a screen lock set to None fails with `ENGINE_FAILURE`. On an iPhone simulator with an always-on display, such as the iPhone 17 Pro, `unlock()` can leave the display off. [device.lock](https://e2e.com/docs/reference/mobile#lock)
+
+- [#1977](https://github.com/e2e-inc/e2e/pull/1977) [`1785e91`](https://github.com/e2e-inc/e2e/commit/1785e91aa4346beae5f50eb0d442d1904cb2a442) Thanks [@karolkulesza](https://github.com/karolkulesza)! - `getAttribute()` and `toHaveAttribute()` read `label`, `resource-id`, `class`, and, on Android, `content-desc` on a device node, the names an Appium suite asks for (`label` is the accessibility label, on Android the text when there is no content description; `resource-id` and `class` also stand in for iOS `name` and `type`). Before, a device node carried only `placeholder`.
+
+- [#2297](https://github.com/e2e-inc/e2e/pull/2297) [`fb3f95f`](https://github.com/e2e-inc/e2e/commit/fb3f95f5689c1c74bcd31a19fa8c00555ba42d34) Thanks [@kdy1](https://github.com/kdy1)! - `device.pressButton(button)` presses the `'volume-up'`, `'volume-down'`, or `'power'` button as a recorded `device.pressButton` step. An Android emulator or phone takes all three, and a physical iPhone or iPad the volume buttons; an iOS simulator is `UNSUPPORTED_CAPABILITY`. [device.pressButton](https://e2e.com/docs/reference/mobile#pressbutton)
+
+- [#2292](https://github.com/e2e-inc/e2e/pull/2292) [`b299e53`](https://github.com/e2e-inc/e2e/commit/b299e534400bb1e7dd4196b88b4c31efc66a4657) Thanks [@karolkulesza](https://github.com/karolkulesza)! - `device.installApp(path)` with nothing at the path, and `device.setLocation()` with a latitude outside -90 to 90, a longitude outside -180 to 180, or a coordinate that is not a finite number, now fail with `INVALID_ARGUMENT` (a test error, exit 1) before any device command. Both used to fail as `ENGINE_FAILURE` and exit 3, like a broken device.
+
+- [#1900](https://github.com/e2e-inc/e2e/pull/1900) [`c801a12`](https://github.com/e2e-inc/e2e/commit/c801a12f8afea963775652ba73a7dbeaea894fa2) Thanks [@GaspardIV](https://github.com/GaspardIV)! - Fix BrowserStack, TestMu AI, and Revyl runs on Windows failing during cleanup with `could not confirm its sessions ended` and leaving the device session open until idle timeout, and fail the release when any agent-device lease provider rejects ending the session (with the default `cleanupTimeout`).
+
+- [#2255](https://github.com/e2e-inc/e2e/pull/2255) [`d4086b5`](https://github.com/e2e-inc/e2e/commit/d4086b54930c4ea00d14a799556384989bd1173d) Thanks [@KrzysztofMoch](https://github.com/KrzysztofMoch)! - Add `screen.scrollTo(edge)` and `locator.scrollTo(edge)`, which scroll the page or a list to its `'top'`, `'bottom'`, `'left'`, or `'right'` edge, as far as it goes. On the web the screen scrolls the page, or the pane under the viewport's center when the page does not scroll; a locator scrolls its node or the nearest ancestor that scrolls. A device drags until a drag moves nothing. The engine contract gains the `scrollTo` action kind, outside SPI v1, which the web and mobile engines declare, so both now need `@e2e-dev/core` and `e2e` 0.25.1 or newer; the desktop engine does not declare it, so `scrollTo` there fails with `UNSUPPORTED_CAPABILITY`.
+
 ## 0.12.9
 
 ### Patch Changes

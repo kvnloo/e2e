@@ -1,5 +1,13 @@
 # @e2e-dev/testmu
 
+## 0.0.8
+
+### Patch Changes
+
+- [#2304](https://github.com/e2e-inc/e2e/pull/2304) [`342e95a`](https://github.com/e2e-inc/e2e/commit/342e95abebc188d7ee553b16643c9dac5cdcae50) Thanks [@okwasniewski](https://github.com/okwasniewski)! - Bump `agent-device`, `@agent-device/revyl`, and `@agent-device/testmu` to 0.21.43, `@vitest/expect` to 5.1.2, and `@agentclientprotocol/sdk` to 2.12.0.
+
+- [#2299](https://github.com/e2e-inc/e2e/pull/2299) [`62f97e0`](https://github.com/e2e-inc/e2e/commit/62f97e04bc2c3aaf1d3992bd7dc166a0420e062d) Thanks [@kdy1](https://github.com/kdy1)! - `@e2e-dev/revyl`, `@e2e-dev/testmu`, and `@e2e-dev/limrun` check that their agent-device matches the engine's, and they now pin agent-device 0.21.43, so they need `@e2e-dev/mobile` 0.12.10 or newer, the first release that runs it.
+
 ## 0.0.7
 
 ### Patch Changes

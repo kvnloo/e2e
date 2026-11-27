@@ -1,6 +1,6 @@
 {
   "name": "e2e",
-  "version": "0.25.0",
+  "version": "0.25.1",
   "displayName": "e2e",
   "description": "Write, run, and debug end-to-end tests for web and mobile apps with e2e, the open source agentic test runner",
   "shortDescription": "Agentic tests for web & mobile",
@@ -15,7 +15,7 @@
       "command": "npx",
       "args": [
         "-y",
-        "e2e@0.25.0",
+        "e2e@0.25.1",
         "mcp"
       ]
     }

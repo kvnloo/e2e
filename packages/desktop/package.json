@@ -1,6 +1,6 @@
 {
   "name": "@e2e-dev/desktop",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "Desktop engine for e2e agentic end-to-end testing, built on agent-desktop: native apps, a prototype tested on macOS",
   "keywords": [
     "e2e",

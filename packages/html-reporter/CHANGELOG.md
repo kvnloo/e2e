@@ -1,5 +1,11 @@
 # @e2e-dev/html-reporter
 
+## 0.0.4
+
+### Patch Changes
+
+- [#2312](https://github.com/e2e-inc/e2e/pull/2312) [`c97f5cf`](https://github.com/e2e-inc/e2e/commit/c97f5cf35be1977d0c60a34eac3a874cb1e17e63) Thanks [@okwasniewski](https://github.com/okwasniewski)! - `test.step(title, fn)` runs a function as one named step and returns what it returns. The trace page, the HTML report, and an MCP test outcome show the title with the calls made inside it nested under it, and steps nest. The list reporter shows the steps of a running test, and keeps a `test.step` in its output when it failed or an agent step ran inside it. A failure summary names the `test.step` the failed call was in. In `report.json` it is a step of kind `step` with the api `test.step`, each step inside it carries its index as `parent`, and step progress carries `identity.parentStepId`; the CTRF report has `parent` in a step's `extra`. [test.step](https://e2e.com/docs/reference/test#test-step)
+
 ## 0.0.3
 
 ### Patch Changes

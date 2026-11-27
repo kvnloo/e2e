@@ -1,5 +1,19 @@
 # @e2e-dev/web
 
+## 0.17.1
+
+### Patch Changes
+
+- [#2256](https://github.com/e2e-inc/e2e/pull/2256) [`ed57c2b`](https://github.com/e2e-inc/e2e/commit/ed57c2bd98e138eefee23c41cd87997f4f68da9a) Thanks [@KrzysztofMoch](https://github.com/KrzysztofMoch)! - `browser.clock` controls time in the attempt's pages, as Playwright's `page.clock` does: `install({ time })`, `pauseAt`, `resume`, `runFor`, `fastForward`, `setFixedTime`, and `setSystemTime`, with Playwright's arguments, over `Date`, `performance`, timers, and `requestAnimationFrame` in every tab and frame. The clock survives navigation, `app.restart()`, and `app.clearState()`; a CDP recovery after a test used it fails the attempt with `ENGINE_FAILURE`, since the reconnected browser cannot restore it. Only the page's time moves: the test's timeouts and `expect` polling keep real time. A scroll or swipe no longer waits on the page's own animation frame, so it does not hang while a page's clock is paused. An argument Playwright would misread or refuse is `INVALID_ARGUMENT`, and a page timer that throws while the clock runs it is `EVALUATE_FAILED`. [Clock](https://e2e.com/docs/reference/web#clock)
+
+- [#2251](https://github.com/e2e-inc/e2e/pull/2251) [`a118c36`](https://github.com/e2e-inc/e2e/commit/a118c36ea51e8942510eb2f1927b0a77cdf0f34c) Thanks [@okwasniewski](https://github.com/okwasniewski)! - `browser.name` and `browser.version` tell a test which browser it runs in. `name` is `'chromium'`, `'firefox'`, or `'webkit'`, and always `'chromium'` for a browser attached over CDP, and `version` is the version the running browser reports, for a hosted or attached browser too. Skip a test on one browser with `test.skip(browser.name === 'firefox', 'reason')` in its body. [name, version](https://e2e.com/docs/reference/web#name-version)
+
+- [#2254](https://github.com/e2e-inc/e2e/pull/2254) [`a9bea74`](https://github.com/e2e-inc/e2e/commit/a9bea74b31039c0ffc0469fa4c4bdaef538798af) Thanks [@KrzysztofMoch](https://github.com/KrzysztofMoch)! - Add `browser.waitForRequest` and predicate support for `browser.waitForResponse` and `browser.waitForRequest`. Both accept a URL glob, a `RegExp`, `{ method, url }`, or a sync or async predicate, and refuse options other than `timeout`. `waitForResponse` now returns a `PageResponse`, extending `WebResponse` with `request: WebRequest`, and `waitForRequest` returns `WebRequest`, the same type as `route.request`.
+
+- [#2255](https://github.com/e2e-inc/e2e/pull/2255) [`d4086b5`](https://github.com/e2e-inc/e2e/commit/d4086b54930c4ea00d14a799556384989bd1173d) Thanks [@KrzysztofMoch](https://github.com/KrzysztofMoch)! - Add `screen.scrollTo(edge)` and `locator.scrollTo(edge)`, which scroll the page or a list to its `'top'`, `'bottom'`, `'left'`, or `'right'` edge, as far as it goes. On the web the screen scrolls the page, or the pane under the viewport's center when the page does not scroll; a locator scrolls its node or the nearest ancestor that scrolls. A device drags until a drag moves nothing. The engine contract gains the `scrollTo` action kind, outside SPI v1, which the web and mobile engines declare, so both now need `@e2e-dev/core` and `e2e` 0.25.1 or newer; the desktop engine does not declare it, so `scrollTo` there fails with `UNSUPPORTED_CAPABILITY`.
+
+- [#2283](https://github.com/e2e-inc/e2e/pull/2283) [`5c1839c`](https://github.com/e2e-inc/e2e/commit/5c1839c70772ecfd4c917cd5080e52a2c2e1b9b7) Thanks [@JaynouOliver](https://github.com/JaynouOliver)! - `press` with a single character that is not on a US keyboard (`é`, `ß`, `€`, `中`, an emoji) presses it in Chromium instead of failing with `ENGINE_FAILURE: Unknown key`. The page gets `keydown`, `input`, and `keyup` as for any key, and modifiers work (`Control+é`). In Firefox and WebKit it fails as `UNSUPPORTED_CAPABILITY` before any key is sent, where it used to leave the modifier held.
+
 ## 0.17.0
 
 ### Minor Changes

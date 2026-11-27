@@ -1,6 +1,6 @@
 {
   "name": "@e2e-dev/core",
-  "version": "0.25.0",
+  "version": "0.25.1",
   "description": "Drive a browser or a native app from code, with an optional agent: the engines, locators, and agent of e2e, without the test runner",
   "keywords": [
     "e2e",

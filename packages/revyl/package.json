@@ -1,6 +1,6 @@
 {
   "name": "@e2e-dev/revyl",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "description": "Revyl for e2e: hosted iOS simulators and Android emulators for mobile tests",
   "keywords": [
     "e2e",
